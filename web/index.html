@@ -21,7 +21,8 @@
        src/*.js. Ink tokens (--ink*) go on cards (--paper*), --on-ground* goes
        on text drawn straight on the deep page, --on-band* on the header
        bands. tests/unit/theme_tokens.test.js (no raw colours) and
-       tests/e2e/test_rendered_contrast.py (rendered WCAG contrast) enforce it. Palette is WCAG-checked: text tokens are
+       tests/e2e/test_rendered_contrast.py (rendered WCAG contrast) enforce it. NEW VIEW? Extend
+       test_rendered_contrast.py to open it with realistic data (multi-row tables, details open). Palette is WCAG-checked: text tokens are
        >=4.9:1 on every surface, sport colours >=3:1 on white. */
     :root {
       --ground:#1f4a59; --paper:#fbf8f0; --paper-2:#f6f1e6; --inset:#f3eee2; --control-border:#c2b8a0;
@@ -1050,6 +1051,11 @@
     section:not(.detail-section):not(.rv-card) > p.sub, .rd-start { color: var(--on-ground-soft); }
     .detail-section:not(:has(.rv-card, details, .panel, .rv-more, .chat-thread-head)) { padding: 14px 16px; background: var(--paper);
       border: 1px solid var(--card-border); border-radius: var(--radius); }
+    /* Sections the card rule above skips (they hold a header row or <details>) still draw ink text, so
+       they are cards themselves: otherwise their tables and lists land straight on --ground. */
+    .detail-section.raw-analysis, details.race-analysis, details.race-debrief { padding: 14px 16px; background: var(--paper);
+      border: 1px solid var(--card-border); border-radius: var(--radius); }
+    table.laps-table tbody tr:nth-child(odd) { background: var(--paper); }
     .rv-drillhead { padding: 10px 14px; background: var(--band); border: 1px solid var(--band-border); border-radius: var(--radius); }
     .rv-drillhead h3 { color: var(--on-band); }
     .rv-drillhead .rv-sub { color: var(--on-band-soft); }
