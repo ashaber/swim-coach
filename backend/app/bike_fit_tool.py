@@ -36,6 +36,9 @@ def _snapshot_summary(snapshot: BikeFitSnapshot, result: FitResult) -> dict[str,
         "id": str(snapshot.id), "bike_name": snapshot.bike_name, "bike_type": snapshot.bike_type,
         "date": snapshot.date.isoformat(), "retired": snapshot.retired,
         "values": _values(result.outputs), "closure": result.closure.status,
+        "coordinates": {c.key: {"x": round(c.x, 1), "y": round(c.y, 1)} for c in result.coordinates},
+        "saddle_model": result.recorded["saddle_model"], "sit_point_from_tip_mm": result.recorded["sit_point_from_tip_mm"],
+        "crank_length_mm": result.recorded["crank_length_mm"], "pedal_stack_mm": result.recorded["pedal_stack_mm"],
         "notes": result.notes,
     }
     if result.closure.status != "ok":
@@ -93,6 +96,9 @@ def handle_get_bike_fit(input_data: dict[str, Any], *, store: Any, slug: str) ->
             "comparison": {
                 "unweighted": _rows(comparison.unweighted),
                 "seated": _rows(comparison.seated) if comparison.seated else None,
+                "saddle_same": comparison.saddle.same,
+                "crank_diff_mm": round(comparison.crank.diff_mm, 1),
+                "pedal_stack_diff_mm": round(comparison.pedal_stack.diff_mm, 1) if comparison.pedal_stack else None,
                 "exceeds_error_means": f"difference is more than {comparison.factor:g} x its combined +/-",
                 "notes": comparison.notes,
             },

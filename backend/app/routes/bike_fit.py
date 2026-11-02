@@ -18,8 +18,8 @@ from swim_coach.bike_fit import (
     COMPARE_SIGMA_FACTOR,
     WIDTH_DEFAULTS_MM,
     LIMITS_STATEMENT,
-    SIT_FRACTION,
     TAPE_SIGMA_MM,
+    TILT_ADVISORY_DEG,
     BikeFitError,
     compare_fits,
     compute_fit,
@@ -65,7 +65,7 @@ async def list_bike_fit(
         "defaults": {
             "width_mm": WIDTH_DEFAULTS_MM,
             "tape_sigma_mm": TAPE_SIGMA_MM,
-            "sit_fraction": SIT_FRACTION,
+            "tilt_advisory_deg": TILT_ADVISORY_DEG,
             "compare_sigma_factor": COMPARE_SIGMA_FACTOR,
         },
         "limits": LIMITS_STATEMENT,

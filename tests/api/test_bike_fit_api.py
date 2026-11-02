@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ def body(truth: Truth = CX, name: str = "CX", **over) -> dict:
             "tape": {k: round(v, 1) for k, v in tapes_for(truth).items()},
             "saddle_tilt_deg": truth.tilt_deg, "saddle_length_mm": truth.saddle_len, "crank_length_mm": 172.5,
             "string_length_mm": truth.string_len,
+            "sit_point_from_tip_mm": round(math.dist(truth.st, truth.s), 1), "saddle_model": "Test saddle",
         },
     }
     payload.update(over)
@@ -71,6 +73,12 @@ def test_get_lists_snapshots_with_defaults_and_limits(client) -> None:
     lambda b: b["inputs"]["tape"].update(bb_fa=-4),
     lambda b: b["inputs"].pop("crank_length_mm"),
     lambda b: b["inputs"]["tape"].pop("fa_h"),
+    lambda b: b["inputs"]["tape"].pop("bb_s"),
+    lambda b: b["inputs"]["tape"].pop("bc_s"),
+    lambda b: b["inputs"]["tape"].pop("ra_s"),
+    lambda b: b["inputs"].pop("sit_point_from_tip_mm"),
+    lambda b: b["inputs"].pop("saddle_model"),
+    lambda b: b["inputs"].update(pedal_stack_source="measured"),
     lambda b: b["inputs"].pop("string_length_mm"),
     lambda b: b["inputs"].update(saddle_tilt_deg=80),
     lambda b: b["inputs"].update(seated_floor_bb_mm=300),
@@ -100,6 +108,8 @@ def test_compare_two_snapshots_flags_error_exceedance(client) -> None:
     rows = {r["key"]: r for r in res.json()["unweighted"]}
     assert rows["setback_tip_mm"]["diff"] == pytest.approx(85.0, abs=1.5)
     assert rows["setback_tip_mm"]["exceeds_error"] is True
+    body_ = res.json()
+    assert body_["saddle"]["same"] is True and body_["crank"]["diff_mm"] == 0 and body_["pedal_stack"] is None
     assert client.get(f"/api/bike-fit/compare?athlete=renee&a={a['id']}&b=nope", headers=auth_headers()).status_code == 404
 
 
@@ -153,9 +163,11 @@ def test_tool_returns_values_sigma_comparison_and_limits(client, athletes_dir) -
     first = res["snapshots"][0]
     assert first["closure"] == "ok" and first["values"]["setback_tip_mm"]["pm"] > 0
     assert "does not recommend" in res["limits"]
+    assert first["coordinates"]["s"]["x"] < 0 and first["saddle_model"] == "Test saddle"
     cmp_ = h["get_bike_fit"]({"compare_a": "CX", "compare_b": "trail"})
     row = next(r for r in cmp_["comparison"]["unweighted"] if r["key"] == "setback_tip_mm")
     assert row["diff"] == pytest.approx(85.0, abs=1.5) and row["exceeds_error"] is True
+    assert cmp_["comparison"]["saddle_same"] is True and cmp_["comparison"]["crank_diff_mm"] == 0
     assert h["get_bike_fit"]({"bike": "nope"})["snapshots"] == []
     assert "error" in h["get_bike_fit"]({"compare_a": "CX", "compare_b": "missing"})
 
