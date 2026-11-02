@@ -115,11 +115,13 @@ BikeType = Literal["drop_bar", "mtb"]
 
 
 class BikeFitTape(BaseModel):
-    """The fifteen required readings, in mm (see `bike_fit` for the point definitions): thirteen
+    """The eighteen required readings, in mm (see `bike_fit` for the point definitions): sixteen
     straight-line tapes (on the bike's LEFT side where a point is off the centerline) and two
     floor-to-axle-center heights, of which only the difference is used (wheel-radius correction).
-    `ra_fa`, `fa_h`, `ra_bc` and `bc_h` are closure checks: they are compared with the solved
-    geometry, never used to build it."""
+    `ra_fa`, `fa_h`, `ra_bc`, `bc_h` and `ra_s` are closure checks: they are compared with the solved
+    geometry, never used to build it. `bb_s` and `bc_s` place the sit-bone point S on the saddle
+    centerline; `ra_s` checks it (a BB-S error is a saddle-height error that the tip-to-S distance
+    cannot see), and the solved tip-to-S line is also checked against `sit_point_from_tip_mm`."""
 
     model_config = {"frozen": True}
 
@@ -128,10 +130,13 @@ class BikeFitTape(BaseModel):
     fa_bc: float = Field(gt=0, le=3000)
     bb_st: float = Field(gt=0, le=3000)
     bc_st: float = Field(gt=0, le=3000)
+    bb_s: float = Field(gt=0, le=3000)
+    bc_s: float = Field(gt=0, le=3000)
     ra_bb: float = Field(gt=0, le=3000)
     ra_st: float = Field(gt=0, le=3000)
     bb_h: float = Field(gt=0, le=3000)
     st_h: float = Field(gt=0, le=3000)
+    ra_s: float = Field(gt=0, le=3000)
     ra_fa: float = Field(gt=0, le=3000)
     fa_h: float = Field(gt=0, le=3000)
     ra_bc: float = Field(gt=0, le=3000)
@@ -150,6 +155,13 @@ class BikeFitInputs(BaseModel):
     model_config = {"frozen": True}
 
     tape: BikeFitTape
+    sit_point_from_tip_mm: float = Field(gt=20, le=300)  # tape mark on the centerline, from the saddle tip
+    saddle_model: str = Field(min_length=1, max_length=80)
+    saddle_rail_note: str = Field(default="", max_length=200)  # recorded only, free text
+    frame_stack_mm: float | None = Field(default=None, gt=0, le=1500)  # from the maker, recorded only
+    frame_reach_mm: float | None = Field(default=None, gt=0, le=1500)  # from the maker, recorded only
+    pedal_stack_mm: float | None = Field(default=None, gt=0, le=100)  # pedal axle center to shoe sole, clipped in
+    pedal_stack_source: Literal["maker_spec", "measured"] | None = None
     saddle_tilt_deg: float = Field(ge=-45, le=45)  # positive = nose up
     floor_tilt_deg: float | None = Field(default=None, ge=-20, le=20)  # same device on the floor
     saddle_length_mm: float = Field(ge=100, le=400)
@@ -169,6 +181,8 @@ class BikeFitInputs(BaseModel):
 
     @model_validator(mode="after")
     def _seated_pair(self) -> "BikeFitInputs":
+        if self.pedal_stack_source is not None and self.pedal_stack_mm is None:
+            raise ValueError("pedal stack source needs a pedal stack value")
         if (self.seated_floor_bb_mm is None) != (self.seated_floor_bc_mm is None):
             raise ValueError("seated floor-to-BB and floor-to-BC come as a pair: give both or neither")
         return self

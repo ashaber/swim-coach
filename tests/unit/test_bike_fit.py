@@ -17,9 +17,7 @@ def out(result, key: str):
 
 
 def truth_metrics(t: Truth) -> dict[str, float]:
-    th = math.radians(t.tilt_deg)
-    k = bike_fit.SIT_FRACTION * t.saddle_len
-    srp = (t.st[0] - k * math.cos(th), t.st[1] - k * math.sin(th))
+    srp = t.s
     axle_y_at_bb = t.ra[1] + (t.fa[1] - t.ra[1]) * (0 - t.ra[0]) / (t.fa[0] - t.ra[0])
     return {
         "setback_tip_mm": -t.st[0],
@@ -69,8 +67,8 @@ def test_unequal_wheel_radius_is_corrected_via_axle_heights() -> None:
     assert good.radius_difference_mm == pytest.approx(-8.0, abs=0.01)
 
 
-DIST_TAPES = ["bb_fa", "bb_bc", "fa_bc", "bb_st", "bc_st", "ra_bb", "ra_st", "bb_h", "st_h", "bc_h",
-              "ra_fa", "fa_h", "ra_bc"]
+DIST_TAPES = ["bb_fa", "bb_bc", "fa_bc", "bb_st", "bc_st", "bb_s", "bc_s", "ra_bb", "ra_st", "bb_h", "st_h",
+              "bc_h", "ra_fa", "fa_h", "ra_bc", "ra_s"]
 
 
 def residuals(res) -> list[float]:
@@ -87,15 +85,26 @@ def test_every_required_tape_trips_at_least_one_check_on_a_12_mm_typo(truth: Tru
     assert tape in [s.measure for s in res.closure.suspects]  # the hint names the typo'd tape
 
 
-def test_typo_residual_pattern_matches_the_reference_simulation() -> None:
-    # reference sim, 12 mm typo, typical CX bike: residuals [RA-FA, FA-H, RA-BC] (abs, mm)
-    want = {"bb_fa": (11.6, 3.1, 0), "bb_bc": (1.3, 11.8, 9.0), "fa_bc": (1.3, 12.3, 0), "bb_st": (2.1, 0.8, 8.5),
-            "bc_st": (1.1, 10.8, 5.0), "ra_bb": (11.2, 0, 6.3), "ra_st": (1.8, 0, 8.3), "bb_h": (0, 14.5, 0),
-            "st_h": (0, 10.6, 0)}
-    for tape, expect in want.items():
-        res = compute_fit(inputs_for(CX, tape={tape: tapes_for(CX)[tape] + 12}), "drop_bar")
-        got = [abs(r) for r in residuals(res)[:3]]
-        assert got == pytest.approx(list(expect), abs=3.5), (tape, got)
+@pytest.mark.parametrize("truth", [CX, MTB], ids=["cx", "mtb"])
+def test_a_12_mm_typo_in_the_entered_tip_to_s_distance_trips_the_tip_s_check(truth: Truth) -> None:
+    good = inputs_for(truth).sit_point_from_tip_mm
+    res = compute_fit(inputs_for(truth, sit_point_from_tip_mm=good + 12), truth.bike_type)
+    assert res.closure.status == "bad"
+    tip_s = next(c for c in res.closure.checks if c.key == "tip_s")
+    assert tip_s.status == "bad" and tip_s.residual_mm == pytest.approx(-12.0, abs=0.1)
+    assert "sit_tip" in [s.measure for s in res.closure.suspects]
+
+
+@pytest.mark.parametrize("truth", [CX, MTB], ids=["cx", "mtb"])
+@pytest.mark.parametrize("tape", ["bb_s", "bc_s"])
+def test_s_tapes_are_caught_only_by_the_s_checks(truth: Truth, tape: str) -> None:
+    t = tapes_for(truth)
+    res = compute_fit(inputs_for(truth, tape={tape: t[tape] + 12}), truth.bike_type)
+    old = [c for c in res.closure.checks if c.key not in ("tip_s", "ra_s")]
+    assert all(c.status == "ok" for c in old)  # S feeds none of the older checks
+    by = {c.key: c.status for c in res.closure.checks}
+    # BB-S is nearly the saddle height, so the tip-to-S line barely sees it: RA-S is what catches it
+    assert by["ra_s" if tape == "bb_s" else "tip_s"] == "bad", by
 
 
 def test_the_check_pattern_lists_likely_suspects_only_as_a_hint() -> None:
@@ -118,11 +127,13 @@ def test_false_alarm_rate_at_1_mm_tape_error_is_low_with_the_noise_scaled_thresh
 
     rng = random.Random(20261101)
     base = tapes_for(CX)
+    sit = inputs_for(CX).sit_point_from_tip_mm
     warn = bad = 0
     runs = 1500
     for _ in range(runs):
         noisy = {k: v + rng.gauss(0, bike_fit.TAPE_SIGMA_MM) for k, v in base.items()}
-        status = compute_fit(inputs_for(CX, tape=noisy), "drop_bar").closure.status
+        mark = sit + rng.gauss(0, bike_fit.TAPE_SIGMA_MM)
+        status = compute_fit(inputs_for(CX, tape=noisy, sit_point_from_tip_mm=mark), "drop_bar").closure.status
         warn += status in ("warn", "bad")
         bad += status == "bad"
     assert bad / runs < 0.005
@@ -162,12 +173,13 @@ def test_tape_shorter_than_the_lateral_gap_is_a_clean_error() -> None:
 
 def test_error_estimates_are_near_the_reference_simulation() -> None:
     res = compute_fit(inputs_for(CX), "drop_bar")
-    # reference sim, 1 mm tape sd on a typical CX bike: setback 1.5, height 0.9, reach 0.9, drop 2.0
-    # (setback = tip, height = BB to sit point, reach/drop = saddle-to-hand)
-    assert out(res, "setback_tip_mm").sigma == pytest.approx(1.5, rel=0.4)
-    assert out(res, "saddle_height_mm").sigma == pytest.approx(0.9, rel=0.4)
-    assert out(res, "saddle_to_hand_reach_mm").sigma == pytest.approx(0.9, rel=0.4)
-    assert out(res, "saddle_to_hand_drop_mm").sigma == pytest.approx(2.0, rel=0.4)
+    # 1 mm tape sd on a typical CX bike (Jacobian, measured S): tip setback 1.8, sit setback 2.1, height 1.0,
+    # saddle-to-hand reach 1.7 and drop 2.6 (S is solved from two tapes, so it is noisier than the old midpoint)
+    assert out(res, "setback_tip_mm").sigma == pytest.approx(1.8, rel=0.2)
+    assert out(res, "setback_sit_mm").sigma == pytest.approx(2.1, rel=0.2)
+    assert out(res, "saddle_height_mm").sigma == pytest.approx(1.0, rel=0.2)
+    assert out(res, "saddle_to_hand_reach_mm").sigma == pytest.approx(1.7, rel=0.2)
+    assert out(res, "saddle_to_hand_drop_mm").sigma == pytest.approx(2.6, rel=0.2)
 
 
 def test_error_estimates_are_deterministic_and_scale_with_the_constant(monkeypatch) -> None:
@@ -179,19 +191,29 @@ def test_error_estimates_are_deterministic_and_scale_with_the_constant(monkeypat
     assert out(c, "setback_sit_mm").sigma == pytest.approx(2 * out(a, "setback_sit_mm").sigma, rel=1e-6)
 
 
-def test_floor_tilt_reading_is_subtracted_from_saddle_tilt() -> None:
-    key = "saddle_to_hand_drop_mm"  # the sit point's height is what saddle tilt moves
-    plain = compute_fit(inputs_for(CX), "drop_bar")
-    skewed = compute_fit(inputs_for(CX, floor_tilt_deg=1.0), "drop_bar")  # tilt 0 - floor 1 = -1 deg
-    assert out(skewed, key).value != pytest.approx(out(plain, key).value, abs=1.0)
-    ref = compute_fit(inputs_for(Truth(**{**MTB.__dict__, "tilt_deg": 1.0})), "mtb")
-    assert out(compute_fit(inputs_for(MTB, floor_tilt_deg=1.0), "mtb"), key).value == pytest.approx(
-        out(ref, key).value, abs=1e-6)
+def test_saddle_tilt_and_length_are_recorded_and_move_no_output() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    b = compute_fit(inputs_for(CX, saddle_tilt_deg=3.0, floor_tilt_deg=1.0, saddle_length_mm=250), "drop_bar")
+    assert [o.value for o in a.outputs] == [o.value for o in b.outputs]
+    assert b.tilt_deg == pytest.approx(2.0)  # saddle reading minus the floor reading
+
+
+@pytest.mark.parametrize("tilt,floor,flagged", [(4.0, None, False), (4.1, None, True), (-4.5, None, True),
+                                                (5.0, 2.0, False), (2.0, -3.0, True)])
+def test_tilt_beyond_4_degrees_is_a_neutral_advisory_that_changes_nothing(tilt, floor, flagged) -> None:
+    res = compute_fit(inputs_for(CX, saddle_tilt_deg=tilt, floor_tilt_deg=floor), "drop_bar")
+    hit = [n for n in res.notes if "Tilt beyond" in n]
+    assert bool(hit) is flagged
+    if hit:
+        assert "check the measurement" in hit[0] and "\u00b14" in hit[0]
+    assert res.closure.status == "ok"
+    assert bike_fit.TILT_ADVISORY_DEG == 4.0
 
 
 def test_blank_widths_fall_back_to_labelled_defaults_and_are_flagged() -> None:
     inp = BikeFitInputs(tape=inputs_for(CX).tape, saddle_tilt_deg=0, saddle_length_mm=270, crank_length_mm=172.5,
-                        string_length_mm=420)
+                        string_length_mm=420, sit_point_from_tip_mm=inputs_for(CX).sit_point_from_tip_mm,
+                        saddle_model="Test saddle")
     res = compute_fit(inp, "drop_bar")
     lat = res.assumptions
     assert (lat["bb_mm"], lat["fa_mm"], lat["ra_mm"]) == (60.0, 50.0, 71.0)
@@ -236,7 +258,8 @@ def test_pedal_distances_are_saddle_height_plus_and_minus_crank_length() -> None
 
 def test_crank_length_is_required() -> None:
     with pytest.raises(ValueError):
-        BikeFitInputs(tape=inputs_for(CX).tape, saddle_tilt_deg=0, saddle_length_mm=270, string_length_mm=420)
+        BikeFitInputs(tape=inputs_for(CX).tape, saddle_tilt_deg=0, saddle_length_mm=270, string_length_mm=420,
+                      sit_point_from_tip_mm=130, saddle_model="Test saddle")
 
 
 def test_optional_bar_text_fields_are_recorded_not_used() -> None:
@@ -308,5 +331,92 @@ def test_points_for_drawing_match_the_known_geometry() -> None:
     assert res.axle_heights_mm == {"front": CX.fa[1] - CX.floor_y, "rear": CX.ra[1] - CX.floor_y}
 
 
-def test_sit_reference_point_is_the_midpoint_of_the_saddle() -> None:
-    assert bike_fit.SIT_FRACTION == 0.5
+def test_there_is_no_midpoint_constant_and_no_srp_point() -> None:
+    assert not hasattr(bike_fit, "SIT_FRACTION")
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    assert "SRP" not in res.points and res.points["S"] == pytest.approx(list(CX.s), abs=0.05)
+    assert "sit_fraction" not in res.constants
+
+
+def test_s_is_solved_from_bb_s_and_bc_s_and_saddle_length_is_never_used() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    b = compute_fit(inputs_for(CX, saddle_length_mm=330), "drop_bar")
+    assert a.points["S"] == b.points["S"]
+    assert out(a, "setback_sit_mm").value == pytest.approx(-CX.s[0], abs=0.05)
+    assert out(a, "saddle_height_mm").value == pytest.approx(math.hypot(*CX.s), abs=0.05)
+    assert out(a, "saddle_height_mm").label.startswith("Saddle height, BB to sit point")
+    assert "bb_s" in out(a, "saddle_height_mm").depends_on  # BB-S is the height itself
+    assert {"bb_s", "bc_s"} <= set(out(a, "setback_sit_mm").depends_on)
+
+
+def test_tip_s_check_compares_the_solved_straight_line_with_the_entered_mark_distance() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    tip_s = next(c for c in res.closure.checks if c.key == "tip_s")
+    assert tip_s.computed_mm == pytest.approx(math.dist(CX.st, CX.s), abs=0.05)
+    assert tip_s.measured_mm == pytest.approx(inputs_for(CX).sit_point_from_tip_mm)
+    assert tip_s.warn_mm == pytest.approx(max(3.0, 2.5 * tip_s.sigma_mm))
+    assert tip_s.bad_mm == pytest.approx(max(6.0, 4.0 * tip_s.sigma_mm))
+    assert len(res.closure.checks) == 6
+
+
+def test_standard_coordinates_from_the_bb_for_tip_s_clamp_and_hand() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    coords = {c.key: c for c in res.coordinates}
+    assert list(coords) == ["st", "s", "bc", "h"]
+    for key, want in (("st", CX.st), ("s", CX.s), ("bc", CX.bc), ("h", CX.h)):
+        assert (coords[key].x, coords[key].y) == pytest.approx(want, abs=0.05)
+        assert coords[key].sigma_x > 0 and coords[key].sigma_y > 0
+    labels = {o.key: o.label for o in res.outputs}
+    assert "clamp" in labels["reach_bc_mm"].lower() and "clamp" in labels["stack_bc_mm"].lower()
+    assert "at H" in labels["reach_hand_mm"] and "at H" in labels["stack_hand_mm"]
+    assert "head tube" in bike_fit.FRAME_STACK_REACH_NOTE
+
+
+def test_recorded_only_fields_move_nothing() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    inp = inputs_for(CX, frame_stack_mm=560, frame_reach_mm=390, saddle_rail_note="2 mm back of center",
+                     pedal_stack_mm=12, pedal_stack_source="maker_spec")
+    b = compute_fit(inp, "drop_bar")
+    assert [o.value for o in a.outputs] == [o.value for o in b.outputs]
+    assert b.recorded["frame_stack_mm"] == 560 and b.recorded["saddle_rail_note"] == "2 mm back of center"
+
+
+def test_pedal_stack_source_needs_a_value() -> None:
+    with pytest.raises(ValueError):
+        inputs_for(CX, pedal_stack_source="measured")
+
+
+def test_comparison_shows_saddle_match_crank_difference_and_its_pedal_effect() -> None:
+    a = compute_fit(inputs_for(CX, crank_length_mm=172.5), "drop_bar")
+    b = compute_fit(inputs_for(CX, crank_length_mm=170.0), "drop_bar")
+    cmp = compare_fits(a, b)
+    assert cmp.saddle.same is True
+    assert cmp.crank.diff_mm == pytest.approx(-2.5)
+    assert cmp.crank.pedal_down_effect_mm == pytest.approx(-2.5) and cmp.crank.pedal_up_effect_mm == pytest.approx(2.5)
+    row = {r.key: r for r in cmp.unweighted}
+    assert row["sit_to_pedal_down_mm"].diff == pytest.approx(-2.5, abs=0.01)
+    assert row["sit_to_pedal_up_mm"].diff == pytest.approx(2.5, abs=0.01)
+    assert any("seat tube angle" in n for n in cmp.notes)
+
+
+def test_comparison_flags_a_different_saddle_or_mark_distance() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    b = compute_fit(inputs_for(CX, saddle_model="Other saddle"), "drop_bar")
+    assert compare_fits(a, b).saddle.same is False
+    c = compute_fit(inputs_for(CX, saddle_model="  test SADDLE "), "drop_bar")
+    assert compare_fits(a, c).saddle.same is True
+    far = Truth(**{**CX.__dict__, "s": (CX.s[0] - 20, CX.s[1])})
+    notes = " ".join(compare_fits(a, compute_fit(inputs_for(far), "drop_bar")).notes)
+    assert "mark distance differs" in notes
+
+
+def test_pedal_stack_comparison_only_when_both_have_it_with_a_large_stated_uncertainty() -> None:
+    a = compute_fit(inputs_for(CX, pedal_stack_mm=12, pedal_stack_source="maker_spec"), "drop_bar")
+    b = compute_fit(inputs_for(CX, pedal_stack_mm=15, pedal_stack_source="measured", crank_length_mm=170.0),
+                    "drop_bar")
+    assert compare_fits(a, compute_fit(inputs_for(CX), "drop_bar")).pedal_stack is None
+    ps = compare_fits(a, b).pedal_stack
+    assert ps is not None and ps.diff_mm == pytest.approx(3.0)
+    assert ps.adjusted_pedal_down_diff_mm == pytest.approx(-2.5 + 3.0, abs=0.01)
+    assert ps.sigma_each_mm == 3.0 and ps.sigma_diff_mm > 4.2
+    assert "shoe" in ps.note and "limited" in ps.note
