@@ -24,6 +24,27 @@ export function createBikeFitForm({ bikeType = 'drop_bar', today = '' } = {}) {
   return form;
 }
 
+/** Slice of app state for the bike-geometry view (see main.js's state.bikeFit). */
+export function createBikeFitState() {
+  return {
+    open: false,
+    load: { status: 'idle', error: null },
+    snapshots: [],
+    limits: '',
+    form: createBikeFitForm(),
+    formErrors: [],
+    focus: null,
+    submit: { status: 'idle', message: null },
+    selectedId: null,
+    compare: { a: '', b: '', status: 'idle', data: null, error: null },
+  };
+}
+
+export function localIsoDate(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 export function setField(form, field, value) {
   return { ...form, [field]: value };
 }

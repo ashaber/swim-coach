@@ -28,6 +28,7 @@ import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { renderChatPanel } from './chatPanel.js';
+import { renderBikeFitEntryPanel } from './bikeFitView.js';
 import { isSheetOpen, sheetKeyFor } from './threadSheet.js';
 import { buildHistoryFeed } from './history.js';
 import {
@@ -5321,6 +5322,7 @@ export function renderSettingsTab({
         <div id="google-signin-btn"></div>
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
+      ${backendConfigured ? renderBikeFitEntryPanel() : ''}
       ${backendConfigured ? renderGrantsPanel({ grants, form: grantsForm, submit: grantsSubmit }) : ''}
       ${backendConfigured ? renderSportsThresholdsPanel({ form: profileForm, load: profileLoad }) : ''}
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}

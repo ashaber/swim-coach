@@ -685,6 +685,86 @@
     .conn-result.ok { color: var(--c-ow); background: color-mix(in srgb, var(--c-ow) 14%, var(--paper)); }
     .conn-result.fail { color: var(--c-signal); background: var(--c-signal-wash); }
 
+    /* bike geometry (Settings > Bike geometry): form, side-view diagram, results, comparison */
+    .bf-wrap .bf-panel { margin-top: 16px; }
+    .bf-kicker { margin: 0 0 12px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); }
+    .bf-sub { margin: 18px 0 8px; font-family: var(--display); font-size: 15px; color: var(--ink); }
+    .bf-hint, .bf-draft, .bf-note, .bf-def-line, .bf-def-empty { font-size: 12.5px; color: var(--ink-soft); margin: 4px 0 10px; }
+    .bf-note { color: var(--ink); background: var(--note-bg); border: 1px solid var(--note-border); border-radius: var(--radius-xs); padding: 8px 10px; }
+    .bf-sticky { position: sticky; top: 0; z-index: 5; padding: 8px 10px; }
+    .bf-svg { display: block; width: 100%; height: auto; max-height: 20vh; }
+    .bf-sticky .bf-defs { max-height: 6.5em; overflow-y: auto; }
+    .bf-field input, .bf-field select, .bf-field textarea { scroll-margin-top: 42vh; }
+    .bf-floor { stroke: var(--ink-faint); stroke-width: 4; stroke-dasharray: 18 12; }
+    .bf-tire { fill: none; stroke: var(--ink-soft); stroke-width: 16; }
+    .bf-rim { fill: none; stroke: var(--line); stroke-width: 5; }
+    .bf-frame { stroke: var(--ink); stroke-width: 16; stroke-linecap: round; fill: none; }
+    .bf-frame.bf-thick { stroke-width: 26; }
+    .bf-frame.bf-post { stroke-width: 12; stroke: var(--ink-soft); }
+    .bf-frame.bf-fork { stroke-width: 22; }
+    .bf-frame.bf-lower { stroke-width: 30; }
+    .bf-frame.bf-shock { stroke: var(--accent-ink); stroke-width: 22; stroke-dasharray: 8 7; }
+    .bf-frame.bf-bar { stroke-width: 14; stroke: var(--ink-soft); }
+    .bf-frame.bf-lever { stroke-width: 10; stroke: var(--ink-soft); }
+    .bf-hood { fill: var(--ink-soft); stroke: var(--ink); stroke-width: 6; stroke-linejoin: round; }
+    .bf-saddle { fill: var(--ink); stroke: var(--ink); stroke-width: 8; stroke-linejoin: round; }
+    .bf-saddle.is-active, .bf-crank.is-active { stroke: var(--accent-ink); }
+    .bf-crank { stroke: var(--ink-soft); stroke-width: 18; stroke-linecap: round; }
+    .bf-pedal, .bf-grip { fill: var(--ink-soft); stroke: var(--ink); stroke-width: 6; }
+    .bf-ring { fill: none; stroke: var(--ink-faint); stroke-width: 6; }
+    .bf-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 6; }
+    .bf-pt.is-active .bf-dot { fill: var(--accent); stroke: var(--accent-ink); }
+    .bf-halo { fill: color-mix(in srgb, var(--accent) 30%, transparent); }
+    .bf-label { fill: var(--ink); font-family: var(--display, sans-serif); font-weight: 800; }
+    .bf-pt.is-active .bf-label { fill: var(--accent-ink); }
+    .bf-tape { stroke: var(--accent-ink); stroke-width: 12; stroke-dasharray: 34 20; stroke-linecap: round; }
+    .bf-defs { margin-top: 6px; min-height: 3.2em; }
+    .bf-def-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink); }
+    .bf-def-list b { color: var(--accent-ink); }
+    .bf-field .bf-input-row { display: flex; align-items: center; gap: 8px; }
+    .bf-field .bf-input-row input { flex: 1 1 auto; min-width: 0; font-size: 16px; }
+    .bf-field .bf-input-row select { flex: 0 0 auto; font-size: 16px; }
+    .bf-unit { font-size: 12px; color: var(--ink-faint); min-width: 2.2em; }
+    .bf-hint { display: block; }
+    .bf-n { font-family: var(--mono); color: var(--accent-ink); }
+    .bf-opt { font-weight: 500; color: var(--ink-faint); }
+    .bf-group { border: 1px solid var(--line); border-radius: var(--radius-sm); margin: 0 0 12px; padding: 4px 12px 0; }
+    .bf-group legend { font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 0 6px; }
+    .bf-howto { margin: 6px 0 10px; font-size: 13px; color: var(--ink-soft); }
+    .bf-howto summary { cursor: pointer; font-weight: 700; color: var(--accent-ink); }
+    .bf-errors { margin: 0; padding-left: 18px; }
+    .bf-table-wrap { overflow-x: auto; }
+    .bf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .bf-table th, .bf-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; color: var(--ink); }
+    .bf-table thead th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+    .bf-table tbody tr:nth-child(even) { background: var(--paper-2); }
+    .bf-table td.mono { text-align: right; white-space: nowrap; }
+    .bf-pm, .bf-u { color: var(--ink-soft); font-weight: 500; }
+    .bf-closure { border-radius: var(--radius-xs); padding: 8px 10px; font-size: 13px; margin: 6px 0 10px; color: var(--ink); background: var(--paper-2); border-left: 6px solid var(--c-ow); }
+    .bf-closure-warn { border-left-color: var(--amber); }
+    .bf-closure-bad { border-left-color: var(--c-signal); background: var(--c-signal-wash); }
+    .bf-verdict { font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .bf-beyond { color: var(--c-attn); }
+    .bf-within { color: var(--ink-soft); }
+    .bf-dl dt { font-weight: 700; color: var(--ink); margin-top: 6px; }
+    .bf-dl dd { margin: 0; color: var(--ink-soft); }
+    .bf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .bf-item { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;
+      padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-xs); color: var(--ink); }
+    .bf-item.is-selected { border-color: var(--accent-ink); }
+    .bf-item.is-retired .bf-item-name { opacity: .75; }
+    .bf-item-actions { display: flex; gap: 6px; }
+    .bf-item-actions .btn-ghost { min-height: 40px; }
+    .bf-overlay { margin: 14px 0 0; }
+    .bf-ov-a { fill: none; stroke: var(--ink); stroke-width: 10; stroke-linecap: round; }
+    .bf-ov-b { fill: none; stroke: var(--accent-ink); stroke-width: 10; stroke-dasharray: 26 16; stroke-linecap: round; }
+    .bf-ov-wheel { stroke-width: 5; }
+    .bf-ov-a.bf-ov-dot { fill: var(--ink); }
+    .bf-ov-b.bf-ov-dot { fill: var(--accent-ink); stroke-dasharray: none; }
+    .bf-ov-origin { fill: none; stroke: var(--ink-faint); stroke-width: 6; }
+    .bf-key { display: inline-block; width: 22px; height: 0; vertical-align: middle; border-top: 3px solid var(--ink); }
+    .bf-key-b { border-top: 3px dashed var(--accent-ink); }
+
     /* workout history (Log tab section) */
     .hist-section { margin-top: 28px; }
     .hist-list { display: flex; flex-direction: column; gap: 8px; }

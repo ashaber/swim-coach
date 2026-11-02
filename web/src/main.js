@@ -40,7 +40,13 @@ import {
   fetchCoachConversation, postCoachConversationMessage, patchCoachConversationMuted,
   listLibraryCards, fetchLibraryFile, submitLibraryReview,
   fetchMe,
+  listBikeFit, saveBikeFit, compareBikeFit, retireBikeFit,
 } from './api.js';
+import {
+  createBikeFitState, createBikeFitForm, setField as setBikeFitField, setBikeType, serializeBikeFit,
+  saveDraft as saveBikeFitDraft, loadDraft as loadBikeFitDraft, clearDraft as clearBikeFitDraft, localIsoDate,
+} from './bikeFit.js';
+import { renderBikeFitView, refreshDiagram } from './bikeFitView.js';
 import { shouldLoadPacing, parseRaceStartInput } from './analysis.js';
 import { createSectorOverlay, openSectorOverlay, switchOverlaySector, closeSectorOverlay } from './sectorOverlay.js';
 import { attachMapGestures } from './mapGestures.js';
@@ -492,6 +498,7 @@ const state = {
   // The open planned session's scoped chat thread (conversation.js slice + the session it is for).
   sessionThread: { ...createThreadState(), sessionId: null },
   profileForm: createProfileForm(),
+  bikeFit: createBikeFitState(),
   profileLoad: { status: 'idle', error: null },
   profileSubmit: { status: 'idle', message: null },
   feedbackEntries: { status: 'idle', data: [] },
@@ -731,6 +738,7 @@ function renderTabContent() {
         conversationsUnread: rosterConversationUnreadCount(),
       });
     case 'settings':
+      if (state.bikeFit.open && backendConfigured) return renderBikeFitView({ bikeFit: state.bikeFit, online: state.online });
       return renderSettingsTab({
         identity: state.identity,
         identityError: state.identityError,
@@ -974,6 +982,7 @@ function applyAthleteSession(identity, token) {
   state.askCoachForm = createAskCoachForm();
   state.askCoachSubmit = createAskCoachSubmit();
   state.profileForm = createProfileForm();
+  state.bikeFit = createBikeFitState();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
   // Same lazy-load convention for the ask-coach feature's feedback list
@@ -1064,6 +1073,7 @@ function resetToSignedOut({ identityError = null } = {}) {
   state.askCoachForm = createAskCoachForm();
   state.askCoachSubmit = createAskCoachSubmit();
   state.profileForm = createProfileForm();
+  state.bikeFit = createBikeFitState();
   state.profileLoad = { status: 'idle', error: null };
   state.profileSubmit = { status: 'idle', message: null };
   state.feedbackEntries = { status: 'idle', data: [] };
@@ -3512,6 +3522,147 @@ async function handleSubmitLibraryReview(decision, file, section, contentHash) {
   }
 }
 
+// --- Bike geometry (Settings > Bike geometry) -----------------------------------------------
+// Typing never re-renders (it would drop the keyboard): inputs write into state.bikeFit.form and
+// the local draft; focus swaps just the diagram panel. Only saving, comparing and the bike-type
+// select (which changes the lateral defaults) call render().
+
+function handleOpenBikeFit() {
+  const slug = athleteSlug();
+  const bf = state.bikeFit;
+  bf.open = true;
+  bf.form = loadBikeFitDraft(slug) || createBikeFitForm({ today: localIsoDate() });
+  if (!bf.form.date) bf.form = setBikeFitField(bf.form, 'date', localIsoDate());
+  bf.formErrors = [];
+  bf.focus = null;
+  bf.submit = { status: 'idle', message: null };
+  log.info('bikefit.open', { athlete: slug });
+  render();
+  loadBikeFit();
+}
+
+async function loadBikeFit() {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const bf = state.bikeFit;
+  bf.load = { status: 'loading', error: null };
+  render();
+  const result = await listBikeFit({ baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug() });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    bf.snapshots = result.data.snapshots;
+    bf.limits = result.data.limits;
+    bf.load = { status: 'ready', error: null };
+    log.info('bikefit.loaded', { athlete: athleteSlug(), count: bf.snapshots.length });
+  } else {
+    bf.load = { status: 'error', error: result.error };
+    log.error('bikefit.load_failed', { athlete: athleteSlug(), error: result.error });
+  }
+  render();
+}
+
+function handleBikeFitInput(field, value) {
+  const bf = state.bikeFit;
+  if (field === 'bikeType') {
+    bf.form = setBikeType(bf.form, value);
+    saveBikeFitDraft(athleteSlug(), bf.form);
+    render();
+    return;
+  }
+  bf.form = setBikeFitField(bf.form, field, value);
+  saveBikeFitDraft(athleteSlug(), bf.form);
+}
+
+function onBikeFitFocusIn(e) {
+  const el = e.target;
+  if (el?.dataset?.form !== 'bikefit' || !el.dataset.field) return;
+  state.bikeFit.focus = el.dataset.field;
+  refreshDiagram(appEl, state.bikeFit.form.bikeType, state.bikeFit.focus);
+}
+
+function handleResetBikeFitDraft() {
+  const bf = state.bikeFit;
+  clearBikeFitDraft(athleteSlug());
+  bf.form = createBikeFitForm({ bikeType: bf.form.bikeType, today: localIsoDate() });
+  bf.formErrors = [];
+  bf.submit = { status: 'idle', message: null };
+  render();
+}
+
+async function handleSaveBikeFit() {
+  const bf = state.bikeFit;
+  if (bf.submit.status === 'submitting') return;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const checked = serializeBikeFit(bf.form);
+  if (!checked.ok) {
+    bf.formErrors = checked.errors;
+    render();
+    return;
+  }
+  bf.formErrors = [];
+  bf.submit = { status: 'submitting', message: null };
+  render();
+  log.info('bikefit.save', { athlete: athleteSlug(), bike_type: bf.form.bikeType });
+  const result = await saveBikeFit({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), payload: checked.payload,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    clearBikeFitDraft(athleteSlug());
+    bf.snapshots = [...bf.snapshots, result.data];
+    bf.selectedId = result.data.id;
+    bf.form = createBikeFitForm({ bikeType: bf.form.bikeType, today: localIsoDate() });
+    bf.submit = { status: 'success', message: null };
+    bf.compare = { ...bf.compare, status: 'idle', data: null, a: bf.compare.a || result.data.id, b: bf.compare.b || result.data.id };
+    log.info('bikefit.saved', { athlete: athleteSlug(), snapshot_id: result.data.id });
+  } else {
+    bf.submit = { status: 'error', message: result.error };
+    log.error('bikefit.save_failed', { athlete: athleteSlug(), error: result.error });
+  }
+  render();
+  if (result.ok) document.querySelector('[data-results]')?.scrollIntoView({ block: 'start' });
+}
+
+async function handleRetireBikeFit(id, retired) {
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const result = await retireBikeFit({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), id, retired,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    state.bikeFit.snapshots = state.bikeFit.snapshots.map((s) => (s.id === id ? result.data : s));
+    log.info('bikefit.retire_set', { athlete: athleteSlug(), snapshot_id: id, retired });
+  } else {
+    log.error('bikefit.retire_failed', { athlete: athleteSlug(), error: result.error });
+    state.bikeFit.load = { status: 'error', error: result.error };
+  }
+  render();
+}
+
+async function handleCompareBikeFit() {
+  const bf = state.bikeFit;
+  const settings = state.settingsForm;
+  if (!isConfigured(settings, state.identity)) return;
+  const { a, b } = bf.compare;
+  if (!a || !b) return;
+  bf.compare = { ...bf.compare, status: 'loading', error: null };
+  render();
+  const result = await compareBikeFit({
+    baseUrl: settings.baseUrl, token: settings.token, athlete: athleteSlug(), a, b,
+  });
+  if (handleUnauthorized(result)) return;
+  if (result.ok) {
+    bf.compare = { ...bf.compare, status: 'ready', data: result.data, error: null };
+    log.info('bikefit.compared', { athlete: athleteSlug() });
+  } else {
+    bf.compare = { ...bf.compare, status: 'error', data: null, error: result.error };
+    log.error('bikefit.compare_failed', { athlete: athleteSlug(), error: result.error });
+  }
+  render();
+}
+
 async function handleSubmitProfile() {
   if (state.profileSubmit.status === 'submitting') return;
   const settings = state.settingsForm;
@@ -4582,6 +4733,13 @@ async function onAppClick(e) {
     case 'health-status:submit': handleSubmitHealthStatusSelf(); break;
     case 'health-status:resolve': handleResolveHealthStatusSelf(el.dataset.id); break;
     case 'profile:submit': handleSubmitProfile(); break;
+    case 'bikefit:open': handleOpenBikeFit(); break;
+    case 'bikefit:close': state.bikeFit.open = false; render(); break;
+    case 'bikefit:save': await handleSaveBikeFit(); break;
+    case 'bikefit:reset-draft': handleResetBikeFitDraft(); break;
+    case 'bikefit:show': state.bikeFit.selectedId = el.dataset.id; render(); break;
+    case 'bikefit:retire': await handleRetireBikeFit(el.dataset.id, el.dataset.retired !== '1'); break;
+    case 'bikefit:compare': await handleCompareBikeFit(); break;
     case 'library:open-file': handleOpenLibraryFile(el.dataset.file, el.dataset.anchor); break;
     // Goes through history.back() (not handleCloseLibraryFile() directly) so
     // both the in-app back control and hardware/gesture back close the
@@ -4744,6 +4902,8 @@ function onAppInput(e) {
   if (!formName || !field) return;
 
   if (formName === 'log') state.logForm[field] = el.value;
+  else if (formName === 'bikefit') handleBikeFitInput(field, el.value);
+  else if (formName === 'bikefit-compare') state.bikeFit.compare = { ...state.bikeFit.compare, [field]: el.value };
   else if (formName === 'profile') {
     if (field === 'pool_days') {
       // Each pool-day checkbox carries data-day (see views.js's
@@ -5317,6 +5477,7 @@ appEl.addEventListener('toggle', (event) => {
 }, true);
 appEl.addEventListener('change', onAppChange);
 appEl.addEventListener('input', onAppInput);
+appEl.addEventListener('focusin', onBikeFitFocusIn);
 appEl.addEventListener('keydown', onAppKeydown);
 attachChartProbes(appEl);
 attachMapGestures(appEl, { commit: (view) => { state.mapView = view; }, reset: resetCourseMap });
