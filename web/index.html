@@ -692,7 +692,12 @@
     .bf-hint, .bf-draft, .bf-note, .bf-def-line, .bf-def-empty { font-size: 12.5px; color: var(--ink-soft); margin: 4px 0 10px; }
     .bf-note { color: var(--ink); background: var(--note-bg); border: 1px solid var(--note-border); border-radius: var(--radius-xs); padding: 8px 10px; }
     .bf-sticky { position: sticky; top: 0; z-index: 5; padding: 8px 10px; }
-    .bf-svg { display: block; width: 100%; height: auto; max-height: 20vh; }
+    .bf-svg { display: block; width: 100%; height: auto; max-height: 17vh; }
+    .bf-inset { display: block; width: 100%; height: auto; max-height: 8vh; margin-top: 2px; }
+    .bf-string { fill: none; stroke: var(--accent-ink); stroke-width: 6; stroke-dasharray: 14 9; }
+    .bf-grip-front { stroke: var(--ink); stroke-width: 26; stroke-linecap: round; }
+    .bf-steps { margin: 4px 0 8px; padding-left: 20px; }
+    .bf-checks { margin-top: 6px; }
     .bf-sticky .bf-defs { max-height: 6.5em; overflow-y: auto; }
     .bf-field input, .bf-field select, .bf-field textarea { scroll-margin-top: 42vh; }
     .bf-floor { stroke: var(--ink-faint); stroke-width: 4; stroke-dasharray: 18 12; }
@@ -713,10 +718,10 @@
     .bf-pedal, .bf-grip { fill: var(--ink-soft); stroke: var(--ink); stroke-width: 6; }
     .bf-ring { fill: none; stroke: var(--ink-faint); stroke-width: 6; }
     .bf-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 6; }
-    .bf-pt.is-active .bf-dot { fill: var(--accent); stroke: var(--accent-ink); }
+    .bf-pt.is-active .bf-dot, .bf-ipt.is-active .bf-dot { fill: var(--accent); stroke: var(--accent-ink); }
     .bf-halo { fill: color-mix(in srgb, var(--accent) 30%, transparent); }
     .bf-label { fill: var(--ink); font-family: var(--display, sans-serif); font-weight: 800; }
-    .bf-pt.is-active .bf-label { fill: var(--accent-ink); }
+    .bf-pt.is-active .bf-label, .bf-ipt.is-active .bf-label { fill: var(--accent-ink); }
     .bf-tape { stroke: var(--accent-ink); stroke-width: 12; stroke-dasharray: 34 20; stroke-linecap: round; }
     .bf-defs { margin-top: 6px; min-height: 3.2em; }
     .bf-def-list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink); }

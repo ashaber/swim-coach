@@ -8,7 +8,7 @@ import { esc } from './html.js';
 import { DIAGRAMS } from './bikeFitDiagram.js';
 import { focusInfo } from './bikeFit.js';
 import {
-  TAPE_FIELDS, BIKE_TYPES, LATERAL_NOTE, HOW_TO_MEASURE, HOW_TO_BY_FIELD, STATEMENT,
+  TAPE_FIELDS, BIKE_TYPES, WIDTH_DEFAULTS_MM, HOW_TO_MEASURE, HOW_TO_BY_FIELD, STATEMENT, H_STEPS, H_NOTE,
 } from './bikeFitSpec.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -81,23 +81,47 @@ export function renderBikeSvg(bikeType, focus) {
   return `<svg class="bf-svg" xmlns="${SVG_NS}" viewBox="${d.viewBox}" role="img" aria-label="${label}">${drawBike(d, focus)}${drawFocus(d, focus)}</svg>`;
 }
 
+/** Front view of the bars: the string between the two contact points, its midpoint H, and the bar clamp BC. */
+export function renderStringInset(bikeType, info) {
+  const mtb = bikeType === 'mtb';
+  const hOn = info.points.includes('H') ? ' is-active' : '';
+  const bcOn = info.points.includes('BC') ? ' is-active' : '';
+  const bar = mtb
+    ? '<line class="bf-frame bf-bar" x1="40" y1="100" x2="600" y2="100" /><line class="bf-grip-front" x1="40" y1="100" x2="150" y2="100" /><line class="bf-grip-front" x1="490" y1="100" x2="600" y2="100" />'
+    : '<path class="bf-frame bf-bar" d="M 130 100 L 510 100" /><path class="bf-frame bf-bar" d="M 130 100 C 60 100 60 150 130 150" /><path class="bf-frame bf-bar" d="M 510 100 C 580 100 580 150 510 150" />'
+      + '<ellipse class="bf-hood" cx="120" cy="86" rx="38" ry="22" /><ellipse class="bf-hood" cx="520" cy="86" rx="38" ry="22" />';
+  const left = mtb ? [95, 100] : [120, 66];
+  const right = mtb ? [545, 100] : [520, 66];
+  const midY = left[1] - (mtb ? 36 : 22);
+  return `<svg class="bf-inset" xmlns="${SVG_NS}" viewBox="0 0 640 175" role="img"
+      aria-label="Front view of the bars: a string between the left and right contact points, H at its midpoint">
+    ${bar}
+    <circle class="bf-dot" cx="${left[0]}" cy="${left[1]}" r="10" /><circle class="bf-dot" cx="${right[0]}" cy="${right[1]}" r="10" />
+    <path class="bf-string" d="M ${left[0]} ${left[1]} L ${left[0]} ${midY} L ${right[0]} ${midY} L ${right[0]} ${right[1]}" />
+    <g class="bf-ipt${bcOn}" data-ipoint="BC"><circle class="bf-dot" cx="320" cy="100" r="11" /><text class="bf-label" x="340" y="128" font-size="34">BC</text></g>
+    <g class="bf-ipt${hOn}" data-ipoint="H"><circle class="bf-halo" cx="320" cy="${midY}" r="${hOn ? 26 : 0}" /><circle class="bf-dot" cx="320" cy="${midY}" r="12" /><text class="bf-label" x="342" y="${midY - 10}" font-size="34">H</text></g>
+    <text class="bf-label bf-str-label" x="${left[0] + 14}" y="${midY - 8}" font-size="28">string</text>
+  </svg>`;
+}
+
 function definitionsHtml(info, bikeType) {
   if (!info.points.length) {
     return '<p class="bf-def-empty">Tap a measurement field to see its points on the bike.</p>';
   }
   const items = info.definitions.map((x) => `<li><b>${esc(x.point)}</b> (${esc(x.name)}): ${esc(x.text)}</li>`).join('');
   const how = HOW_TO_BY_FIELD[{ tiltMag: 'saddle_tilt', tiltDir: 'saddle_tilt', floorMag: 'floor_tilt', floorDir: 'floor_tilt',
-    saddleLength: 'saddle_length', crankLength: 'crank_length', barWidth: 'bar_width', seatBb: 'seated_bb', seatBc: 'seated_bc' }[info.field]];
+    saddleLength: 'saddle_length', crankLength: 'crank_length', stringLength: 'string_length', crankWidth: 'crank_width', frontAxleWidth: 'front_axle_width', rearAxleWidth: 'rear_axle_width', seatBb: 'seated_bb', seatBc: 'seated_bc' }[info.field]];
   const tape = info.tape
     ? `<p class="bf-def-line">Tape straight from ${esc(info.tape.from)} to ${esc(info.tape.to)}.</p>`
     : info.floor ? `<p class="bf-def-line">Tape straight down from ${esc(info.floor)} to the floor.</p>` : '';
-  return `<ul class="bf-def-list">${items}</ul>${tape}${how ? `<p class="bf-def-line">${esc(how)}</p>` : ''}`;
+  const hNote = info.points.includes('H') ? `<p class="bf-def-line">${esc(H_NOTE)}</p>` : '';
+  return `<ul class="bf-def-list">${items}</ul>${tape}${hNote}${how ? `<p class="bf-def-line">${esc(how)}</p>` : ''}`;
 }
 
 /** Diagram plus the one-sentence definition of each highlighted point; re-rendered in place on focus. */
 export function renderDiagramPanel(bikeType, focusField) {
   const info = focusInfo(focusField, bikeType);
-  return `${renderBikeSvg(bikeType, info)}<div class="bf-defs" aria-live="polite">${definitionsHtml(info, bikeType)}</div>`;
+  return `${renderBikeSvg(bikeType, info)}${renderStringInset(bikeType, info)}<div class="bf-defs" aria-live="polite">${definitionsHtml(info, bikeType)}</div>`;
 }
 
 /** Swaps the diagram panel's contents without re-rendering the form (keeps the keyboard up). */
@@ -107,6 +131,17 @@ export function refreshDiagram(root, bikeType, focusField) {
 }
 
 // --- Form ----------------------------------------------------------------------------------
+
+const WIDTH_FALLBACK = {
+  drop_bar: `crank bolts ${WIDTH_DEFAULTS_MM.drop_bar.crank}, front axle ${WIDTH_DEFAULTS_MM.drop_bar.fa}, rear axle ${WIDTH_DEFAULTS_MM.drop_bar.ra} mm`,
+  mtb: `crank bolts ${WIDTH_DEFAULTS_MM.mtb.crank}, front axle ${WIDTH_DEFAULTS_MM.mtb.fa}, rear axle ${WIDTH_DEFAULTS_MM.mtb.ra} mm`,
+};
+
+function textField({ field, label, value }) {
+  return `
+    <label class="field bf-field"><span>${esc(label)} <i class="bf-opt">optional</i></span>
+      <input type="text" autocomplete="off" data-form="bikefit" data-field="${field}" aria-label="${esc(label)}" value="${esc(value)}"></label>`;
+}
 
 function numField({ field, label, value, hint, mode = 'numeric', unit = 'mm', required = false, n = null, extra = '' }) {
   return `
@@ -172,6 +207,8 @@ function renderForm({ form, errors, submit, online }) {
       <details class="bf-howto" open>
         <summary>How to take the measurements</summary>
         <ul>${HOW_TO_MEASURE.map((h) => `<li>${esc(h)}</li>`).join('')}</ul>
+        <p class="bf-sub">Hand point H, step by step</p>
+        <ol class="bf-steps">${H_STEPS[form.bikeType].map((h) => `<li>${esc(h)}</li>`).join('')}</ol>
       </details>
       <h4 class="bf-sub">Tape measures (mm)</h4>
       ${tapeGroups(form)}
@@ -180,12 +217,17 @@ function renderForm({ form, errors, submit, online }) {
       ${signedField({ dirField: 'floorDir', magField: 'floorMag', form, label: 'Floor reading, same device', hint: HOW_TO_BY_FIELD.floor_tilt })}
       ${numField({ field: 'saddleLength', label: 'Saddle length', value: form.saddleLength, required: true, hint: HOW_TO_BY_FIELD.saddle_length })}
       ${numField({ field: 'crankLength', label: 'Crank length', value: form.crankLength, required: true, mode: 'decimal', hint: HOW_TO_BY_FIELD.crank_length })}
-      ${numField({ field: 'barWidth', label: 'Bar width', value: form.barWidth, required: true, hint: HOW_TO_BY_FIELD.bar_width })}
-      <h4 class="bf-sub">Lateral offsets from the centerline (assumptions)</h4>
-      <p class="bf-hint">${esc(LATERAL_NOTE[form.bikeType])} These are assumptions, not measurements: edit them if you know better.</p>
-      ${numField({ field: 'latBb', label: 'BB bolt, left of centerline', value: form.latBb, required: true })}
-      ${numField({ field: 'latFa', label: 'Front axle end, left of centerline', value: form.latFa, required: true })}
-      ${numField({ field: 'latRa', label: 'Rear axle end, left of centerline', value: form.latRa, required: true })}
+      ${numField({ field: 'stringLength', label: 'String length (contact width)', value: form.stringLength, required: true, hint: HOW_TO_BY_FIELD.string_length })}
+      <h4 class="bf-sub">Widths, end to end (tape or caliper)</h4>
+      <p class="bf-hint">Each point&rsquo;s distance from the centerline is half the width. Leave a width blank to use the bike-type fallback (${WIDTH_FALLBACK[form.bikeType]}); results then flag the values that rest on that assumption.</p>
+      ${numField({ field: 'crankWidth', label: 'Crank bolt width, outer face to outer face', value: form.crankWidth, hint: HOW_TO_BY_FIELD.crank_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].crank}"` })}
+      ${numField({ field: 'frontAxleWidth', label: 'Front axle width, end to end', value: form.frontAxleWidth, hint: HOW_TO_BY_FIELD.front_axle_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].fa}"` })}
+      ${numField({ field: 'rearAxleWidth', label: 'Rear axle width, end to end', value: form.rearAxleWidth, hint: HOW_TO_BY_FIELD.rear_axle_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].ra}"` })}
+      <h4 class="bf-sub">Bar details from the maker (recorded, not used)</h4>
+      ${textField({ field: 'barModel', label: 'Bar model', value: form.barModel })}
+      ${textField({ field: 'stemLength', label: 'Stem length', value: form.stemLength })}
+      ${textField({ field: 'backsweep', label: 'Bar backsweep', value: form.backsweep })}
+      ${textField({ field: 'upsweep', label: 'Bar upsweep', value: form.upsweep })}
       ${mtb ? `
       <h4 class="bf-sub">Suspension</h4>
       <p class="bf-hint">Sag is recorded and shown, not used in the geometry.</p>
@@ -235,22 +277,42 @@ function definitionList(outputs) {
 
 function closureHtml(c) {
   const cls = { ok: 'ok', warn: 'warn', bad: 'bad' }[c.status];
-  const word = { ok: 'Closure OK', warn: 'Closure: recheck', bad: 'Closure: likely bad measurement' }[c.status];
+  const word = { ok: 'Checks OK', warn: 'Checks: recheck', bad: 'Checks: likely bad measurement' }[c.status];
+  const rows = c.checks.map((k) => `
+    <tr data-check="${esc(k.key)}" data-status="${k.status}"><th scope="row">${esc(k.label)}</th>
+      <td class="mono">${k.computed_mm.toFixed(1)}</td><td class="mono">${k.measured_mm.toFixed(1)}</td>
+      <td class="mono">${k.residual_mm > 0 ? '+' : ''}${k.residual_mm.toFixed(1)}</td>
+      <td class="mono bf-pm">${k.warn_mm.toFixed(1)} / ${k.bad_mm.toFixed(1)}</td>
+      <td><span class="bf-verdict ${k.status === 'ok' ? 'bf-within' : 'bf-beyond'}">${{ ok: 'OK', warn: 'Recheck', bad: 'Likely bad' }[k.status]}</span></td></tr>`).join('');
   const suspects = c.suspects.length
-    ? `<p class="bf-hint">Recheck first: ${esc(c.suspects.map((s) => s.label).join(', '))}.</p>` : '';
+    ? `<p class="bf-hint">Likely tapes, a hint only: ${esc(c.suspects.map((s) => `${s.label} (about ${s.estimated_error_mm > 0 ? '+' : ''}${s.estimated_error_mm.toFixed(0)} mm off)`).join(', '))}.</p>` : '';
   const affected = c.affected_outputs.length
-    ? `<p class="bf-hint">Values that depend on the suspect measures: ${esc(c.affected_outputs.join(', '))}.</p>` : '';
+    ? `<p class="bf-hint">Values that depend on those tapes: ${esc(c.affected_outputs.join(', '))}.</p>` : '';
   return `
     <div class="bf-closure bf-closure-${cls}" data-closure="${c.status}">
-      <b>${word}</b>: solved RA-FA ${c.computed_mm.toFixed(1)} mm, measured ${c.measured_mm.toFixed(1)} mm, difference ${c.residual_mm.toFixed(1)} mm
-      (warn from ${c.warn_mm} mm, likely bad beyond ${c.bad_mm} mm).
-      <p class="bf-hint">${esc(c.message)}</p>${suspects}${affected}
+      <b>${word}</b>: four tapes (RA-FA, FA-H, RA-BC, BC-H) are compared with the geometry solved from the others. ${esc(c.message)}
+      <div class="bf-table-wrap"><table class="bf-table bf-checks"><thead><tr><th scope="col">Check</th><th scope="col">Solved mm</th><th scope="col">Measured mm</th><th scope="col">Diff mm</th><th scope="col">Recheck / bad at</th><th scope="col">Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${suspects}${affected}
+      <p class="bf-hint">${esc(c.not_checked)}</p>
     </div>`;
 }
 
-function assumptionsHtml(a) {
-  return `<p class="bf-hint"><b>Assumptions:</b> lateral offsets from the centerline, in mm: BB bolt ${a.bb_mm}, front axle end ${a.fa_mm},
-    rear axle end ${a.ra_mm}, hand point ${a.h_mm} (half the bar width)${a.defaulted.length ? `; ${a.defaulted.map((k) => k.toUpperCase()).join(', ')} are bike-type defaults` : ''}.</p>`;
+function barTextHtml(i) {
+  const parts = [['Bar model', i.bar_model], ['Stem length', i.stem_length], ['Bar backsweep', i.bar_backsweep], ['Bar upsweep', i.bar_upsweep]]
+    .filter(([, v]) => v);
+  const string = i.string_length_mm ? `String length ${i.string_length_mm} mm` : '';
+  const text = [string, ...parts.map(([k, v]) => `${k}: ${v}`)].filter(Boolean).join('; ');
+  return text ? `<p class="bf-hint">Recorded, not used in the geometry: ${esc(text)}.</p>` : '';
+}
+
+function assumptionsHtml(a, eff) {
+  const w = a.widths_mm;
+  const flag = (key) => (a.defaulted.includes(key) ? ' <b>(assumed fallback)</b>' : ' (measured)');
+  const effect = eff
+    ? `<p class="bf-hint">A \u00b1${eff.width_error_mm} mm error in any one width moves the largest output by at most ${eff.max_output_change_mm.toFixed(2)} mm.</p>` : '';
+  return `<p class="bf-hint"><b>Widths used:</b> crank bolts ${w.crank_bolt} mm${flag('crank')}, front axle ${w.front_axle} mm${flag('fa')},
+    rear axle ${w.rear_axle} mm${flag('ra')}. Lateral offsets from the centerline are half each width (${a.bb_mm}, ${a.fa_mm}, ${a.ra_mm} mm).
+    The hand point H is the string midpoint, on the centerline, with no lateral offset.</p>${effect}`;
 }
 
 export function renderResults(snap) {
@@ -275,7 +337,7 @@ export function renderResults(snap) {
       <p class="bf-hint">Frame rotated ${fmtValue(seated.rotation_deg, 'deg')} (±${seated.rotation_sigma_deg.toFixed(2)}°) about the BB from the unweighted position (positive is nose up). ${esc(seated.assumption)}</p>
       <div class="bf-table-wrap"><table class="bf-table"><tbody>${valueRows(seated.outputs)}</tbody></table></div>` : ''}
       ${notes}
-      ${assumptionsHtml(d.assumptions)}
+      ${assumptionsHtml(d.assumptions, d.lateral_effect)}${barTextHtml(snap.inputs)}
       ${definitionList(d.outputs)}
     </div>`;
 }

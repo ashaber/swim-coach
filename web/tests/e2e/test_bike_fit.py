@@ -21,12 +21,19 @@ LIMITS = ('This records and compares bike geometry. It does not recommend fit ch
           'or state target angles.')
 
 TAPES = {'bb_fa': 612, 'bb_bc': 760, 'fa_bc': 590, 'bb_st': 705, 'bc_st': 640, 'ra_bb': 430, 'ra_st': 800,
-         'bb_h': 870, 'st_h': 700, 'ra_fa': 1025, 'floor_fa': 335, 'floor_ra': 330}
+         'bb_h': 870, 'st_h': 700, 'bc_h': 120, 'ra_fa': 1025, 'fa_h': 880, 'ra_bc': 1010, 'floor_fa': 335, 'floor_ra': 330}
 
 
 def _output(key, label, unit, value, sigma):
     return {'key': key, 'label': label, 'unit': unit, 'value': value, 'sigma': sigma,
             'definition': f'definition of {label}', 'depends_on': []}
+
+
+def _checks(residual):
+    status = 'ok' if abs(residual) < 3 else 'warn' if abs(residual) < 6 else 'bad'
+    return [{'key': k, 'label': k.upper(), 'computed_mm': 1000.0, 'measured_mm': 1000.0 - residual,
+             'residual_mm': residual, 'sigma_mm': 1.7, 'warn_mm': 4.2, 'bad_mm': 6.8, 'status': status}
+            for k in ('ra_fa', 'fa_h', 'ra_bc', 'bc_h')]
 
 
 def _derived(bike_type, seated):
@@ -44,11 +51,13 @@ def _derived(bike_type, seated):
                    'H': [560, 650], 'SRP': [-140, 705]},
         'axle_heights_mm': {'front': 335, 'rear': 330},
         'seated': None,
-        'closure': {'status': 'ok', 'computed_mm': 1025.2, 'measured_mm': 1025.0, 'residual_mm': 0.2,
-                    'warn_mm': 3, 'bad_mm': 6, 'message': 'RA-FA closes within tolerance.', 'suspects': [],
-                    'affected_outputs': []},
+        'closure': {'status': 'ok', 'message': 'All four checks close within tolerance.',
+                    'not_checked': 'The four checks cannot see the floor heights.', 'suspects': [],
+                    'affected_outputs': [], 'checks': _checks(0.2)},
         'ground_pitch_deg': 0.28, 'radius_difference_mm': 5.0,
-        'assumptions': {'bb_mm': 60, 'fa_mm': 50, 'ra_mm': 71, 'h_mm': 210, 'defaulted': ['bb', 'fa', 'ra']},
+        'assumptions': {'bb_mm': 60, 'fa_mm': 50, 'ra_mm': 71, 'defaulted': ['crank', 'fa', 'ra'],
+                        'widths_mm': {'crank_bolt': 120, 'front_axle': 100, 'rear_axle': 142}},
+        'lateral_effect': {'width_error_mm': 5.0, 'max_output_change_mm': 0.22, 'per_width_mm': {}},
         'constants': {'tape_sigma_mm': 1.0, 'sit_fraction': 0.5},
         'notes': [] if (seated or not mtb) else [
             'Unweighted numbers only: rear sag normally rotates the frame back, so unweighted numbers may '
@@ -76,9 +85,9 @@ class BikeFitBackend:
                 'derived': _derived(payload['bike_type'], seated), 'error': None}
         if self.closure_status != 'ok':
             snap['derived']['closure'].update(
-                status=self.closure_status, residual_mm=-4.0 if self.closure_status == 'warn' else -9.0,
+                status=self.closure_status, checks=_checks(-5.0 if self.closure_status == 'warn' else -9.0),
                 message='recheck the listed measures', affected_outputs=['setback_tip_mm'],
-                suspects=[{'measure': 'bb_fa', 'label': 'BB-FA', 'sensitivity': 1.0}])
+                suspects=[{'measure': 'bb_fa', 'label': 'BB-FA', 'estimated_error_mm': 12.0, 'fit': 0.97}])
         return snap
 
     def handler(self, route):
@@ -118,7 +127,7 @@ class BikeFitBackend:
             body = snap
         else:
             body = {'snapshots': self.snapshots, 'limits': LIMITS,
-                    'defaults': {'lateral_mm': {}, 'tape_sigma_mm': 1.0}}
+                    'defaults': {'width_mm': {}, 'tape_sigma_mm': 1.0}}
         route.fulfill(status=200, content_type='application/json', body=json.dumps(body), headers=CORS_HEADERS)
 
 
@@ -176,7 +185,7 @@ def fill_bike(page, name, bike_type, extra=None):
     field(page, 'tiltMag').fill('0')
     field(page, 'saddleLength').fill('270')
     field(page, 'crankLength').fill('172.5')
-    field(page, 'barWidth').fill('420' if bike_type == 'drop_bar' else '780')
+    field(page, 'stringLength').fill('420' if bike_type == 'drop_bar' else '780')
     for key, value in (extra or {}).items():
         field(page, key).fill(str(value))
 
@@ -219,10 +228,10 @@ def test_focus_highlights_two_points_the_tape_line_and_exact_definitions(bikefit
     # the form was not re-rendered: the focused input is still the active element
     assert page.evaluate('document.activeElement.dataset.field') == 'bb_bc'
     field(page, 'bb_h').focus()
-    assert 'top center of the left hood' in page.inner_text('#bf-diagram .bf-defs')
+    assert 'top centers of the left and right hoods' in page.inner_text('#bf-diagram .bf-defs')
     page.select_option('[data-field="bikeType"]', 'mtb')
     field(page, 'bb_h').focus()
-    assert 'center of the left grip' in page.inner_text('#bf-diagram .bf-defs')
+    assert 'centers of the left and right grips' in page.inner_text('#bf-diagram .bf-defs')
     field(page, 'floor_ra').focus()
     assert page.locator('.bf-pt.is-active').count() == 1
     assert page.locator('.bf-tape').count() == 1
@@ -237,7 +246,7 @@ def test_all_point_definitions_are_on_the_page_for_both_bikes(bikefit_env):
         seen.add(page.inner_text('#bf-diagram .bf-defs'))
     joined = ' '.join(seen)
     for text in ['center of the left crank bolt', 'center of the left front axle end', 'center of the left rear axle end',
-                 'saddle tip, on the centerline', 'top center of the left hood']:
+                 'saddle tip, on the centerline', 'midpoint of a string stretched between the top centers of the left and right hoods']:
         assert text in joined
 
 
@@ -281,14 +290,16 @@ def test_enter_both_bikes_save_and_compare(bikefit_env):
     save(page)
     assert backend.posts[0]['bike_type'] == 'drop_bar'
     assert backend.posts[0]['inputs']['tape']['bb_fa'] == 612
-    assert backend.posts[0]['inputs']['lateral_fa_mm'] == 50
+    assert backend.posts[0]['inputs']['string_length_mm'] == 420
+    assert 'front_axle_width_mm' not in backend.posts[0]['inputs']  # blank width: fallback, flagged in results
+    assert backend.posts[0]['inputs']['tape']['bc_h'] == 120
     results = page.inner_text('[data-results]')
-    assert '±1.8' in results and 'Closure OK' in results
+    assert '±1.8' in results and 'Checks OK' in results and '(assumed fallback)' in results and 'cannot see the floor heights' in results
     # the form was reset after saving; draft cleared
     assert field(page, 'name').input_value() == ''
 
     fill_bike(page, 'Trail', 'mtb', {'sagFront': '20', 'sagRear': '30'})
-    assert field(page, 'latFa').input_value() == '55'  # MTB lateral defaults replaced the untouched ones
+    assert page.locator('.bf-inset').count() == 1  # the string and midpoint diagram
     save(page)
     assert backend.posts[1]['inputs']['sag_rear_pct'] == 30
     assert 'Unweighted numbers only' in page.inner_text('[data-results]')
@@ -334,3 +345,18 @@ def test_retire_marks_a_snapshot_without_deleting_it(bikefit_env):
     page.wait_for_selector('.bf-item.is-retired')
     assert backend.snapshots[0]['retired'] is True
     assert re.search('Restore', page.inner_text('.bf-item'))
+
+
+def test_string_method_diagram_and_steps_are_shown_and_measured_widths_are_sent(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    assert page.locator('.bf-steps li').count() == 3
+    field(page, 'bc_h').focus()
+    assert page.locator('.bf-inset .bf-ipt.is-active').count() == 2
+    assert 'middle of the string' in page.inner_text('#bf-diagram .bf-defs')
+    fill_bike(page, 'CX', 'drop_bar', {'crankWidth': '121', 'frontAxleWidth': '100', 'rearAxleWidth': '142',
+                                       'barModel': 'Test bar'})
+    save(page)
+    sent = backend.posts[0]['inputs']
+    assert (sent['crank_bolt_width_mm'], sent['front_axle_width_mm'], sent['rear_axle_width_mm']) == (121, 100, 142)
+    assert sent['bar_model'] == 'Test bar'

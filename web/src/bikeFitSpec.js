@@ -1,16 +1,16 @@
 // Static description of the bike-geometry measurement scheme: the point definitions (verbatim),
 // the twelve tape measures, and the bike-type defaults. Pure data, no DOM, so the form works
-// offline. The numbers in LATERAL_DEFAULTS_MM mirror engine/swim_coach/bike_fit.py (a test checks
+// offline. The numbers in WIDTH_DEFAULTS_MM mirror engine/swim_coach/bike_fit.py (a test checks
 // both); they are ASSUMPTIONS, shown and editable. Nothing here is a fit target.
 
 export const POINT_DEFINITIONS = {
-  BB: 'center of the left crank bolt',
-  FA: 'center of the left front axle end',
-  RA: 'center of the left rear axle end',
+  BB: 'center of the left crank bolt, at its outer face',
+  FA: 'center of the left front axle end, at its outer face',
+  RA: 'center of the left rear axle end, at its outer face',
   BC: "bar clamp, center of where the stem clamps the bar, on the bike's centerline",
   ST: 'saddle tip, on the centerline',
-  H_drop_bar: 'top center of the left hood',
-  H_mtb: 'center of the left grip',
+  H_drop_bar: 'midpoint of a string stretched between the top centers of the left and right hoods, where the palms sit',
+  H_mtb: 'midpoint of a string stretched between the centers of the left and right grips, where the palms sit',
 };
 
 export const POINT_NAMES = {
@@ -33,7 +33,8 @@ export const BIKE_TYPES = [
 ];
 
 // n is the athlete's own numbering of the tape measures. `floor_*` are floor-to-axle heights:
-// only their difference is used, to correct for unequal wheel radius.
+// only their difference is used, to correct for unequal wheel radius. `check` tapes (RA-FA, FA-H,
+// RA-BC, BC-H) are compared with the solved geometry, not used to build it.
 export const TAPE_FIELDS = [
   { key: 'bb_fa', n: 1, label: 'BB to FA', from: 'BB', to: 'FA', group: 'Triangle one' },
   { key: 'bb_bc', n: 2, label: 'BB to BC', from: 'BB', to: 'BC', group: 'Triangle one' },
@@ -42,24 +43,23 @@ export const TAPE_FIELDS = [
   { key: 'bc_st', n: 5, label: 'BC to ST', from: 'BC', to: 'ST', group: 'Triangle two' },
   { key: 'ra_bb', n: 6, label: 'RA to BB', from: 'RA', to: 'BB', group: 'Triangle three' },
   { key: 'ra_st', n: 7, label: 'RA to ST', from: 'RA', to: 'ST', group: 'Triangle three' },
-  { key: 'bb_h', n: 8, label: 'BB to H', from: 'BB', to: 'H', group: 'Hand point' },
-  { key: 'st_h', n: 9, label: 'ST to H', from: 'ST', to: 'H', group: 'Hand point' },
-  { key: 'ra_fa', n: 10, label: 'RA to FA (wheelbase)', from: 'RA', to: 'FA', group: 'Closure check' },
+  { key: 'bb_h', n: 8, label: 'BB to H', from: 'BB', to: 'H', group: 'Hand point (string midpoint)' },
+  { key: 'st_h', n: 9, label: 'ST to H', from: 'ST', to: 'H', group: 'Hand point (string midpoint)' },
+  { key: 'bc_h', n: 13, label: 'BC to H (bar clamp center to string midpoint)', from: 'BC', to: 'H', check: true, group: 'Hand point (string midpoint)' },
+  { key: 'ra_fa', n: 10, label: 'RA to FA (wheelbase)', from: 'RA', to: 'FA', check: true, group: 'Closure checks' },
+  { key: 'fa_h', n: 14, label: 'FA to H', from: 'FA', to: 'H', check: true, group: 'Closure checks' },
+  { key: 'ra_bc', n: 15, label: 'RA to BC', from: 'RA', to: 'BC', check: true, group: 'Closure checks' },
   { key: 'floor_fa', n: 11, label: 'Floor to FA axle center', from: 'FA', to: null, floor: true, group: 'Wheel radius correction' },
   { key: 'floor_ra', n: 12, label: 'Floor to RA axle center', from: 'RA', to: null, floor: true, group: 'Wheel radius correction' },
 ];
 
 export const TAPE_KEYS = TAPE_FIELDS.map((f) => f.key);
 
-// Lateral offsets from the bike's centerline, mm. ASSUMPTIONS, editable.
-export const LATERAL_DEFAULTS_MM = {
-  drop_bar: { bb: 60, fa: 50, ra: 71 },
-  mtb: { bb: 70, fa: 55, ra: 74 },
-};
-
-export const LATERAL_NOTE = {
-  drop_bar: 'Axle ends at half the hub width (front 100, rear 142 mm); crank bolt is a labelled default.',
-  mtb: 'Axle ends at half the Boost hub width (front 110, rear 148 mm); crank bolt is a labelled default.',
+// Widths measured end to end across the bike, mm; each lateral offset from the centerline is half.
+// FALLBACK ASSUMPTIONS, used only when a width is left blank (and then flagged in the results).
+export const WIDTH_DEFAULTS_MM = {
+  drop_bar: { crank: 120, fa: 100, ra: 142 },
+  mtb: { crank: 140, fa: 110, ra: 148 },
 };
 
 export const HOW_TO_MEASURE = [
@@ -76,10 +76,28 @@ export const HOW_TO_BY_FIELD = {
   floor_tilt: 'Same device, same orientation, laid on the floor where the bike stands. It is subtracted from the saddle reading.',
   saddle_length: 'Tip to tail along the saddle, in millimetres.',
   crank_length: 'The number stamped on the crank arm.',
-  bar_width: 'Grip or hood centre to centre. The hand point sits half this far from the centerline.',
+  string_length: 'The length of the string between the left and right contact points (hood tops or grip centers), measured straight.',
+  crank_width: 'Outer face center of the left crank bolt to outer face center of the right crank bolt, straight across with a tape or caliper. Half of it is the BB bolt\u2019s distance from the centerline.',
+  front_axle_width: 'Outer face of the left front axle end to outer face of the right, end to end, tape or caliper. Half of it is the front axle end\u2019s distance from the centerline.',
+  rear_axle_width: 'Outer face of the left rear axle end to outer face of the right, end to end, tape or caliper. Half of it is the rear axle end\u2019s distance from the centerline.',
   seated_bb: 'Rider on the bike, helper reads. Floor to the center of the left crank bolt.',
   seated_bc: 'Rider on the bike, helper reads. Floor to the bar clamp center.',
 };
+
+export const H_STEPS = {
+  drop_bar: [
+    'Stretch a string between the top centers of the left and right hoods, where the palms sit.',
+    'Pull it taut, then fold it in half to find the middle and stick a piece of tape there: that mark is H.',
+    'Measure the string length (the contact width), then tape from each point to the mark: BB, ST, BC, FA.',
+  ],
+  mtb: [
+    'Stretch a string between the centers of the left and right grips, where the palms sit.',
+    'Pull it taut, then fold it in half to find the middle and stick a piece of tape there: that mark is H.',
+    'Measure the string length (the contact width), then tape from each point to the mark: BB, ST, BC, FA.',
+  ],
+};
+
+export const H_NOTE = 'H is the tape mark at the middle of the string, on the bike\u2019s centerline.';
 
 export const STATEMENT = 'This records geometry and doesn’t recommend changes. It gives no target angles and is not medical advice: take changes and any pain to your fitter.';
 

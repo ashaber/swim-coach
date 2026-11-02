@@ -5,7 +5,7 @@ import {
   createBikeFitForm, setBikeType, setField, serializeBikeFit, saveDraft, loadDraft, clearDraft,
   draftKey, focusInfo, signedAngle,
 } from '../../src/bikeFit.js';
-import { POINT_DEFINITIONS, TAPE_FIELDS, LATERAL_DEFAULTS_MM } from '../../src/bikeFitSpec.js';
+import { POINT_DEFINITIONS, TAPE_FIELDS, WIDTH_DEFAULTS_MM, H_STEPS } from '../../src/bikeFitSpec.js';
 
 const memoryStorage = () => {
   const m = new Map();
@@ -22,26 +22,23 @@ function filled(type = 'drop_bar') {
   f = setField(f, 'tiltMag', '0');
   f = setField(f, 'saddleLength', '270');
   f = setField(f, 'crankLength', '172.5');
-  f = setField(f, 'barWidth', '420');
+  f = setField(f, 'stringLength', '420');
   return f;
 }
 
 describe('form defaults', () => {
-  it('starts with bike-type lateral defaults, today, and a drop-bar bike', () => {
+  it('starts as a drop-bar bike dated today with blank widths (fallbacks are not prefilled)', () => {
     const f = createBikeFitForm({ today: '2026-11-02' });
     expect(f.bikeType).toBe('drop_bar');
     expect(f.date).toBe('2026-11-02');
-    expect([f.latBb, f.latFa, f.latRa]).toEqual(['60', '50', '71']);
+    expect([f.crankWidth, f.frontAxleWidth, f.rearAxleWidth]).toEqual(['', '', '']);
   });
 
-  it('switching to MTB swaps the untouched lateral defaults but keeps edited ones', () => {
-    let f = createBikeFitForm({ today: '2026-11-02' });
-    f = setField(f, 'latFa', '52');
+  it('switching bike type keeps what was typed', () => {
+    let f = setField(createBikeFitForm({ today: '2026-11-02' }), 'frontAxleWidth', '101');
     f = setBikeType(f, 'mtb');
     expect(f.bikeType).toBe('mtb');
-    expect(f.latBb).toBe(String(LATERAL_DEFAULTS_MM.mtb.bb));
-    expect(f.latRa).toBe(String(LATERAL_DEFAULTS_MM.mtb.ra));
-    expect(f.latFa).toBe('52');
+    expect(f.frontAxleWidth).toBe('101');
   });
 });
 
@@ -53,9 +50,28 @@ describe('serializeBikeFit', () => {
     expect(r.payload.bike_type).toBe('drop_bar');
     expect(r.payload.inputs.tape.bb_fa).toBe(500);
     expect(r.payload.inputs.crank_length_mm).toBe(172.5);
-    expect(r.payload.inputs.lateral_bb_mm).toBe(60);
+    expect(r.payload.inputs.string_length_mm).toBe(420);
+    expect(r.payload.inputs.crank_bolt_width_mm).toBeUndefined();
+    expect(r.payload.inputs.bar_model).toBeUndefined();
+    expect(r.payload.inputs.tape.fa_h).toBeGreaterThan(0);
     expect(r.payload.inputs.sag_front_pct).toBeUndefined();
     expect(r.payload.inputs.seated_floor_bb_mm).toBeUndefined();
+  });
+
+  it('sends measured widths and the recorded bar text, and rejects a silly width', () => {
+    let f = setField(setField(setField(filled(), 'crankWidth', '121'), 'frontAxleWidth', '100'), 'barModel', 'Zipp SL-70');
+    const r = serializeBikeFit(f);
+    expect(r.payload.inputs.crank_bolt_width_mm).toBe(121);
+    expect(r.payload.inputs.front_axle_width_mm).toBe(100);
+    expect(r.payload.inputs.bar_model).toBe('Zipp SL-70');
+    f = setField(filled(), 'rearAxleWidth', '5');
+    expect(serializeBikeFit(f).ok).toBe(false);
+  });
+
+  it('requires crank length and string length', () => {
+    const r = serializeBikeFit(setField(setField(filled(), 'crankLength', ''), 'stringLength', ''));
+    expect(r.errors.join(' ')).toMatch(/Crank length/);
+    expect(r.errors.join(' ')).toMatch(/String length/);
   });
 
   it('lists every missing required field in one pass', () => {
@@ -134,7 +150,7 @@ describe('draft persistence', () => {
     s.setItem(draftKey('renee'), JSON.stringify({ version: 1, form: { name: 'Old' } }));
     const d = loadDraft('renee', s);
     expect(d.name).toBe('Old');
-    expect(d.latBb).toBeDefined();
+    expect(d.crankWidth).toBeDefined();
   });
 });
 
@@ -144,11 +160,14 @@ describe('focusInfo (diagram highlight)', () => {
     expect(info.points).toEqual(['BB', 'BC']);
     expect(info.tape).toEqual({ from: 'BB', to: 'BC' });
     expect(info.definitions.map((d) => d.text)).toEqual([POINT_DEFINITIONS.BB, POINT_DEFINITIONS.BC]);
+    expect(POINT_DEFINITIONS.BB).toContain('center of the left crank bolt');
   });
 
   it('H takes the bike-type definition', () => {
-    expect(focusInfo('bb_h', 'drop_bar').definitions[1].text).toBe('top center of the left hood');
-    expect(focusInfo('bb_h', 'mtb').definitions[1].text).toBe('center of the left grip');
+    expect(focusInfo('bb_h', 'drop_bar').definitions[1].text).toContain('top centers of the left and right hoods');
+    expect(focusInfo('bb_h', 'mtb').definitions[1].text).toContain('centers of the left and right grips');
+    expect(focusInfo('bc_h', 'mtb').points).toEqual(['BC', 'H']);
+    expect(focusInfo('stringLength', 'mtb').points).toEqual(['H']);
   });
 
   it('floor-height fields highlight the axle and a vertical floor line', () => {
@@ -174,16 +193,23 @@ describe('point definitions are verbatim', () => {
     for (const text of [
       'center of the left crank bolt', 'center of the left front axle end', 'center of the left rear axle end',
       "bar clamp, center of where the stem clamps the bar, on the bike's centerline",
-      'saddle tip, on the centerline', 'top center of the left hood', 'center of the left grip',
+      'saddle tip, on the centerline',
+      'midpoint of a string stretched between the top centers of the left and right hoods, where the palms sit',
+      'midpoint of a string stretched between the centers of the left and right grips, where the palms sit',
     ]) {
       expect(src).toContain(text);
     }
   });
 
-  it('lateral defaults mirror the engine constants', () => {
+  it('width fallbacks mirror the engine constants', () => {
     const py = readFileSync(fileURLToPath(new URL('../../../engine/swim_coach/bike_fit.py', import.meta.url)), 'utf8');
-    for (const [type, d] of Object.entries(LATERAL_DEFAULTS_MM)) {
-      expect(py).toContain(`"${type}": {"bb": ${d.bb}.0, "fa": ${d.fa}.0, "ra": ${d.ra}.0}`);
+    for (const [type, d] of Object.entries(WIDTH_DEFAULTS_MM)) {
+      expect(py).toContain(`"${type}": {"crank": ${d.crank}.0, "fa": ${d.fa}.0, "ra": ${d.ra}.0}`);
     }
+  });
+
+  it('the string method has step-by-step wording for both bikes', () => {
+    expect(H_STEPS.drop_bar).toHaveLength(3);
+    expect(H_STEPS.mtb[0]).toContain('grips');
   });
 });

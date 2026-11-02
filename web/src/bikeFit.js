@@ -5,19 +5,19 @@
 
 import log from './log.js';
 import {
-  TAPE_FIELDS, TAPE_KEYS, LATERAL_DEFAULTS_MM, POINT_NAMES, pointDefinition,
+  TAPE_FIELDS, TAPE_KEYS, POINT_NAMES, pointDefinition,
 } from './bikeFitSpec.js';
 
 const DRAFT_VERSION = 1;
 const DRAFT_PREFIX = 'swimcoach_bikefit_draft_';
 
 export function createBikeFitForm({ bikeType = 'drop_bar', today = '' } = {}) {
-  const lat = LATERAL_DEFAULTS_MM[bikeType];
   const form = {
     name: '', bikeType, date: today, note: '', tireFront: '', tireRear: '',
     tiltDir: 'up', tiltMag: '', floorDir: 'up', floorMag: '',
-    saddleLength: '', crankLength: '', barWidth: '',
-    latBb: String(lat.bb), latFa: String(lat.fa), latRa: String(lat.ra),
+    saddleLength: '', crankLength: '', stringLength: '',
+    crankWidth: '', frontAxleWidth: '', rearAxleWidth: '',
+    barModel: '', stemLength: '', backsweep: '', upsweep: '',
     sagFront: '', sagRear: '', seatBb: '', seatBc: '',
   };
   for (const key of TAPE_KEYS) form[key] = '';
@@ -49,18 +49,8 @@ export function setField(form, field, value) {
   return { ...form, [field]: value };
 }
 
-// Swapping bike type swaps the lateral defaults, but only where the athlete has not edited them.
 export function setBikeType(form, bikeType) {
-  const old = LATERAL_DEFAULTS_MM[form.bikeType];
-  const next = LATERAL_DEFAULTS_MM[bikeType];
-  const swap = (current, was, now) => (current === String(was) ? String(now) : current);
-  return {
-    ...form,
-    bikeType,
-    latBb: swap(form.latBb, old.bb, next.bb),
-    latFa: swap(form.latFa, old.fa, next.fa),
-    latRa: swap(form.latRa, old.ra, next.ra),
-  };
+  return { ...form, bikeType };
 }
 
 function num(text) {
@@ -114,7 +104,7 @@ export function serializeBikeFit(form) {
   }
   const saddleLength = required(form.saddleLength, 'Saddle length', { min: 100, max: 400, exclusiveMin: false });
   const crankLength = required(form.crankLength, 'Crank length', { min: 140, max: 220, exclusiveMin: false });
-  const barWidth = required(form.barWidth, 'Bar width', { min: 100, max: 900, exclusiveMin: false });
+  const stringLength = required(form.stringLength, 'String length (contact width)', { min: 100, max: 900, exclusiveMin: false });
   const seatBb = optional(form.seatBb, 'Seated floor to BB', 1500);
   const seatBc = optional(form.seatBc, 'Seated floor to BC', 2000);
   if ((seatBb === null) !== (seatBc === null)) errors.push('Give both seated heights (floor to BB and floor to BC) or neither');
@@ -125,12 +115,22 @@ export function serializeBikeFit(form) {
     saddle_tilt_deg: tilt,
     saddle_length_mm: saddleLength,
     crank_length_mm: crankLength,
-    bar_width_mm: barWidth,
+    string_length_mm: stringLength,
   };
   putOptional(inputs, 'floor_tilt_deg', floorTilt);
-  putOptional(inputs, 'lateral_bb_mm', num(form.latBb));
-  putOptional(inputs, 'lateral_fa_mm', num(form.latFa));
-  putOptional(inputs, 'lateral_ra_mm', num(form.latRa));
+  const width = (text, label) => {
+    const n = num(text);
+    if (n === null) return null;
+    if (Number.isNaN(n) || n < 40 || n > 400) { errors.push(`${label} must be a number from 40 to 400 mm (or blank to use the fallback)`); return null; }
+    return n;
+  };
+  putOptional(inputs, 'crank_bolt_width_mm', width(form.crankWidth, 'Crank bolt width'));
+  putOptional(inputs, 'front_axle_width_mm', width(form.frontAxleWidth, 'Front axle width'));
+  putOptional(inputs, 'rear_axle_width_mm', width(form.rearAxleWidth, 'Rear axle width'));
+  for (const [key, field] of [['bar_model', 'barModel'], ['stem_length', 'stemLength'], ['bar_backsweep', 'backsweep'], ['bar_upsweep', 'upsweep']]) {
+    const text = String(form[field] || '').trim();
+    if (text) inputs[key] = text;
+  }
   putOptional(inputs, 'sag_front_pct', optional(form.sagFront, 'Front sag', 100));
   putOptional(inputs, 'sag_rear_pct', optional(form.sagRear, 'Rear sag', 100));
   putOptional(inputs, 'seated_floor_bb_mm', seatBb);
@@ -192,10 +192,10 @@ const OTHER_FOCUS = {
   floorMag: { points: [], extra: null },
   saddleLength: { points: ['ST'], extra: 'saddle' },
   crankLength: { points: ['BB'], extra: 'crank' },
-  barWidth: { points: ['H'], extra: null },
-  latBb: { points: ['BB'], extra: null },
-  latFa: { points: ['FA'], extra: null },
-  latRa: { points: ['RA'], extra: null },
+  stringLength: { points: ['H'], extra: 'string' },
+  crankWidth: { points: ['BB'], extra: null },
+  frontAxleWidth: { points: ['FA'], extra: null },
+  rearAxleWidth: { points: ['RA'], extra: null },
   seatBb: { points: ['BB'], floor: 'BB' },
   seatBc: { points: ['BC'], floor: 'BC' },
 };
