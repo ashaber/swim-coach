@@ -21,7 +21,8 @@ LIMITS = ('This records and compares bike geometry. It does not recommend fit ch
           'or state target angles.')
 
 TAPES = {'bb_fa': 612, 'bb_bc': 760, 'fa_bc': 590, 'bb_st': 705, 'bc_st': 640, 'ra_bb': 430, 'ra_st': 800,
-         'bb_h': 870, 'st_h': 700, 'bc_h': 120, 'ra_fa': 1025, 'fa_h': 880, 'ra_bc': 1010, 'floor_fa': 335, 'floor_ra': 330}
+         'bb_h': 870, 'st_h': 700, 'bc_h': 120, 'ra_fa': 1025, 'fa_h': 880, 'ra_bc': 1010, 'floor_fa': 335, 'floor_ra': 330,
+         'bb_s': 719, 'bc_s': 640, 'ra_s': 690}
 
 
 def _output(key, label, unit, value, sigma):
@@ -33,7 +34,7 @@ def _checks(residual):
     status = 'ok' if abs(residual) < 3 else 'warn' if abs(residual) < 6 else 'bad'
     return [{'key': k, 'label': k.upper(), 'computed_mm': 1000.0, 'measured_mm': 1000.0 - residual,
              'residual_mm': residual, 'sigma_mm': 1.7, 'warn_mm': 4.2, 'bad_mm': 6.8, 'status': status}
-            for k in ('ra_fa', 'fa_h', 'ra_bc', 'bc_h')]
+            for k in ('ra_fa', 'fa_h', 'ra_bc', 'bc_h', 'ra_s', 'tip_s')]
 
 
 def _derived(bike_type, seated):
@@ -48,17 +49,25 @@ def _derived(bike_type, seated):
     out = {
         'bike_type': bike_type, 'outputs': outputs,
         'points': {'BB': [0, 0], 'FA': [600, 70], 'RA': [-420, 70], 'BC': [480, 640], 'ST': [-5, 705],
-                   'H': [560, 650], 'SRP': [-140, 705]},
+                   'H': [560, 650], 'S': [-140, 703]},
+        'coordinates': [
+            {'key': 'st', 'label': 'Saddle tip (ST)', 'x': -5.0, 'y': 705.0, 'sigma_x': 1.1, 'sigma_y': 1.2},
+            {'key': 's', 'label': 'Sit-bone point (S)', 'x': -140.0, 'y': 703.0, 'sigma_x': 2.1, 'sigma_y': 1.0},
+            {'key': 'bc', 'label': 'Bar clamp (BC)', 'x': 480.0, 'y': 640.0, 'sigma_x': 1.0, 'sigma_y': 1.0},
+            {'key': 'h', 'label': 'Hand point (H)', 'x': 560.0, 'y': 650.0, 'sigma_x': 1.0, 'sigma_y': 1.0}],
+        'recorded': {'saddle_model': 'Test saddle', 'saddle_rail_note': '', 'saddle_tilt_deg': 0, 'floor_tilt_deg': None,
+                     'saddle_length_mm': 270, 'sit_point_from_tip_mm': 135, 'frame_stack_mm': None,
+                     'frame_reach_mm': None, 'pedal_stack_mm': None, 'pedal_stack_source': None},
         'axle_heights_mm': {'front': 335, 'rear': 330},
         'seated': None,
-        'closure': {'status': 'ok', 'message': 'All four checks close within tolerance.',
-                    'not_checked': 'The four checks cannot see the floor heights.', 'suspects': [],
+        'closure': {'status': 'ok', 'message': 'All six checks close within tolerance.',
+                    'not_checked': 'The six checks cannot see the floor heights.', 'suspects': [],
                     'affected_outputs': [], 'checks': _checks(0.2)},
         'ground_pitch_deg': 0.28, 'radius_difference_mm': 5.0,
         'assumptions': {'bb_mm': 60, 'fa_mm': 50, 'ra_mm': 71, 'defaulted': ['crank', 'fa', 'ra'],
                         'widths_mm': {'crank_bolt': 120, 'front_axle': 100, 'rear_axle': 142}},
         'lateral_effect': {'width_error_mm': 5.0, 'max_output_change_mm': 0.22, 'per_width_mm': {}},
-        'constants': {'tape_sigma_mm': 1.0, 'sit_fraction': 0.5},
+        'constants': {'tape_sigma_mm': 1.0},
         'notes': [] if (seated or not mtb) else [
             'Unweighted numbers only: rear sag normally rotates the frame back, so unweighted numbers may '
             'understate how upright he actually rides this bike.'],
@@ -107,7 +116,11 @@ class BikeFitBackend:
                              'b': ob['value'], 'diff': diff, 'sigma_a': oa['sigma'], 'sigma_b': ob['sigma'],
                              'sigma_diff': sd, 'exceeds_error': abs(diff) > 2 * sd})
             body = {'a': a, 'b': b, 'factor': 2.0, 'unweighted': rows, 'seated': None,
-                    'notes': ['Snapshot B is an MTB with unweighted results only.']}
+                    'notes': ['Snapshot B is an MTB with unweighted results only.'],
+                    'saddle': {'model_a': 'Test saddle', 'model_b': 'Test saddle', 'same': True},
+                    'crank': {'a_mm': 172.5, 'b_mm': 170.0, 'diff_mm': -2.5, 'pedal_down_effect_mm': -2.5,
+                              'pedal_up_effect_mm': 2.5},
+                    'pedal_stack': None}
         elif req.method == 'POST':
             payload = json.loads(req.post_data or '{}')
             self.posts.append(payload)
@@ -186,6 +199,8 @@ def fill_bike(page, name, bike_type, extra=None):
     field(page, 'saddleLength').fill('270')
     field(page, 'crankLength').fill('172.5')
     field(page, 'stringLength').fill('420' if bike_type == 'drop_bar' else '780')
+    field(page, 'saddleModel').fill('Test saddle')
+    field(page, 'sitPoint').fill('135')
     for key, value in (extra or {}).items():
         field(page, key).fill(str(value))
 
@@ -293,6 +308,9 @@ def test_enter_both_bikes_save_and_compare(bikefit_env):
     assert backend.posts[0]['inputs']['string_length_mm'] == 420
     assert 'front_axle_width_mm' not in backend.posts[0]['inputs']  # blank width: fallback, flagged in results
     assert backend.posts[0]['inputs']['tape']['bc_h'] == 120
+    assert backend.posts[0]['inputs']['tape']['bb_s'] == 719
+    assert backend.posts[0]['inputs']['sit_point_from_tip_mm'] == 135
+    assert backend.posts[0]['inputs']['saddle_model'] == 'Test saddle'
     results = page.inner_text('[data-results]')
     assert '±1.8' in results and 'Checks OK' in results and '(assumed fallback)' in results and 'cannot see the floor heights' in results
     # the form was reset after saving; draft cleared
@@ -314,6 +332,8 @@ def test_enter_both_bikes_save_and_compare(bikefit_env):
     assert page.locator('table.bf-compare tr[data-key="saddle_height_mm"]:has-text("Exceeds error")').count() == 1
     assert page.locator('.bf-overlay .bf-ov-a').count() > 0 and page.locator('.bf-overlay .bf-ov-b').count() > 0
     assert 'unweighted results only' in page.inner_text('#bf-compare')
+    compare_text = page.inner_text('#bf-compare')
+    assert 'Crank length: 172.5 mm vs 170 mm' in compare_text and 'The models match' in compare_text
 
 
 def test_a_rejected_save_keeps_the_draft_and_shows_the_error(bikefit_env):
@@ -345,6 +365,35 @@ def test_retire_marks_a_snapshot_without_deleting_it(bikefit_env):
     page.wait_for_selector('.bf-item.is-retired')
     assert backend.snapshots[0]['retired'] is True
     assert re.search('Restore', page.inner_text('.bf-item'))
+
+
+def test_sit_bone_point_s_is_on_the_diagram_and_its_fields_highlight_it(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    for bike_type in ('drop_bar', 'mtb'):
+        page.select_option('[data-field="bikeType"]', bike_type)
+        assert page.locator('.bf-svg [data-point="S"]').count() == 1
+        field(page, 'bb_s').focus()
+        assert page.locator('.bf-pt.is-active').evaluate_all('els => els.map(e => e.dataset.point)') == ['BB', 'S']
+        assert 'No standard exists' in page.inner_text('#bf-diagram .bf-defs')
+        field(page, 'sitPoint').focus()
+        assert page.locator('.bf-pt.is-active').evaluate_all('els => els.map(e => e.dataset.point)') == ['ST', 'S']
+    assert 'straightedge' in page.inner_text('.bf-wrap')
+    assert page.locator('[data-field="pedalStackSource"] option').count() == 3
+
+
+def test_results_show_coordinates_and_the_saved_payload_has_the_optional_fields(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    fill_bike(page, 'CX', 'drop_bar', {'pedalStack': '12', 'frameReach': '390', 'saddleRail': '2 mm back'})
+    page.select_option('[data-field="pedalStackSource"]', 'maker_spec')
+    save(page)
+    sent = backend.posts[0]['inputs']
+    assert (sent['pedal_stack_mm'], sent['pedal_stack_source'], sent['frame_reach_mm']) == (12, 'maker_spec', 390)
+    assert sent['saddle_rail_note'] == '2 mm back'
+    assert page.locator('[data-results] tr[data-coord]').count() == 4
+    text = page.inner_text('[data-results]')
+    assert 'Sit-bone point (S)' in text and 'Bar stack and reach are at the clamp' in text
 
 
 def test_string_method_diagram_and_steps_are_shown_and_measured_widths_are_sent(bikefit_env):

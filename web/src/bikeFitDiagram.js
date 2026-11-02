@@ -27,7 +27,7 @@ function saddleShape(tail, tip) {
 
 function dropBar() {
   const points = {
-    BB: [0, 0], FA: [600, 70], RA: [-420, 70], BC: [485, 600], ST: [-70, 695], H: [575, 622],
+    BB: [0, 0], FA: [600, 70], RA: [-420, 70], BC: [485, 600], ST: [-70, 695], S: [-205, 695], H: [575, 622],
   };
   const stt = [-158, 516];
   const htt = [395, 539];
@@ -55,14 +55,14 @@ function dropBar() {
       `<circle class="bf-ring" cx="0" cy="0" r="86" />`],
     labels: {
       BB: [55, 95, 'start'], FA: [34, -34, 'start'], RA: [-32, -38, 'end'],
-      BC: [-26, -46, 'end'], ST: [-8, -52, 'middle'], H: [20, -48, 'start'],
+      BC: [-26, -46, 'end'], ST: [30, -52, 'middle'], S: [0, -52, 'middle'], H: [20, -48, 'start'],
     },
   };
 }
 
 function fullSuspension() {
   const points = {
-    BB: [0, 0], FA: [750, 37], RA: [-440, 37], BC: [463, 655], ST: [-40, 703], H: [500, 650],
+    BB: [0, 0], FA: [750, 37], RA: [-440, 37], BC: [463, 655], ST: [-40, 703], S: [-175, 703], H: [500, 650],
   };
   const stt = [-110, 426];
   const htt = [424, 630];
@@ -96,7 +96,7 @@ function fullSuspension() {
       `<circle class="bf-grip" cx="500" cy="-650" r="28" />`],
     labels: {
       BB: [55, 95, 'start'], FA: [36, -36, 'start'], RA: [-34, -38, 'end'],
-      BC: [-40, -40, 'end'], ST: [-8, -52, 'middle'], H: [40, -30, 'start'],
+      BC: [-40, -40, 'end'], ST: [30, -52, 'middle'], S: [0, -52, 'middle'], H: [40, -30, 'start'],
     },
   };
 }

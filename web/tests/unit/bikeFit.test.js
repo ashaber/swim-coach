@@ -23,6 +23,8 @@ function filled(type = 'drop_bar') {
   f = setField(f, 'saddleLength', '270');
   f = setField(f, 'crankLength', '172.5');
   f = setField(f, 'stringLength', '420');
+  f = setField(f, 'sitPoint', '135');
+  f = setField(f, 'saddleModel', 'Test saddle');
   return f;
 }
 
@@ -66,6 +68,28 @@ describe('serializeBikeFit', () => {
     expect(r.payload.inputs.bar_model).toBe('Zipp SL-70');
     f = setField(filled(), 'rearAxleWidth', '5');
     expect(serializeBikeFit(f).ok).toBe(false);
+  });
+
+  it('requires the sit-bone mark distance and the saddle model, and sends optional recorded fields only when given', () => {
+    const r = serializeBikeFit(setField(setField(filled(), 'sitPoint', ''), 'saddleModel', ' '));
+    expect(r.errors.join(' ')).toMatch(/Sit-bone mark/);
+    expect(r.errors.join(' ')).toMatch(/Saddle model/);
+    const plain = serializeBikeFit(filled()).payload.inputs;
+    expect(plain.sit_point_from_tip_mm).toBe(135);
+    expect(plain.saddle_model).toBe('Test saddle');
+    for (const k of ['saddle_rail_note', 'frame_stack_mm', 'frame_reach_mm', 'pedal_stack_mm', 'pedal_stack_source']) expect(plain[k]).toBeUndefined();
+    let f = setField(setField(setField(filled(), 'saddleRail', '2 mm back'), 'frameStack', '560'), 'pedalStack', '12');
+    f = setField(f, 'pedalStackSource', 'measured');
+    const full = serializeBikeFit(f).payload.inputs;
+    expect([full.saddle_rail_note, full.frame_stack_mm, full.pedal_stack_mm, full.pedal_stack_source]).toEqual(['2 mm back', 560, 12, 'measured']);
+    expect(serializeBikeFit(setField(filled(), 'pedalStackSource', 'measured')).errors.join(' ')).toMatch(/Pedal stack source/);
+  });
+
+  it('has eighteen required readings, numbered one to eighteen, including BB-S, BC-S and RA-S', () => {
+    expect(TAPE_FIELDS).toHaveLength(18);
+    expect(TAPE_FIELDS.map((t) => t.n).sort((a, b) => a - b)).toEqual(Array.from({ length: 18 }, (_, i) => i + 1));
+    expect(TAPE_FIELDS.filter((t) => t.check).map((t) => t.key).sort()).toEqual(['bc_h', 'fa_h', 'ra_bc', 'ra_fa', 'ra_s']);
+    for (const key of ['bb_s', 'bc_s', 'ra_s']) expect(TAPE_FIELDS.find((t) => t.key === key)).toBeTruthy();
   });
 
   it('requires crank length and string length', () => {
@@ -161,6 +185,14 @@ describe('focusInfo (diagram highlight)', () => {
     expect(info.tape).toEqual({ from: 'BB', to: 'BC' });
     expect(info.definitions.map((d) => d.text)).toEqual([POINT_DEFINITIONS.BB, POINT_DEFINITIONS.BC]);
     expect(POINT_DEFINITIONS.BB).toContain('center of the left crank bolt');
+  });
+
+  it('the sit-bone mark highlights ST and S and the S tapes name their points', () => {
+    expect(focusInfo('sitPoint', 'drop_bar').points).toEqual(['ST', 'S']);
+    expect(focusInfo('bb_s', 'mtb').points).toEqual(['BB', 'S']);
+    expect(focusInfo('bc_s', 'mtb').tape).toEqual({ from: 'BC', to: 'S' });
+    expect(focusInfo('ra_s', 'mtb').points).toEqual(['RA', 'S']);
+    expect(focusInfo('bb_s', 'mtb').definitions[1].text).toContain('No standard exists');
   });
 
   it('H takes the bike-type definition', () => {

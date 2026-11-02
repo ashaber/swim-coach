@@ -9,6 +9,7 @@ import { DIAGRAMS } from './bikeFitDiagram.js';
 import { focusInfo } from './bikeFit.js';
 import {
   TAPE_FIELDS, BIKE_TYPES, WIDTH_DEFAULTS_MM, HOW_TO_MEASURE, HOW_TO_BY_FIELD, STATEMENT, H_STEPS, H_NOTE,
+  SIT_POINT_NOTE, TILT_ADVISORY_DEG,
 } from './bikeFitSpec.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -110,7 +111,8 @@ function definitionsHtml(info, bikeType) {
   }
   const items = info.definitions.map((x) => `<li><b>${esc(x.point)}</b> (${esc(x.name)}): ${esc(x.text)}</li>`).join('');
   const how = HOW_TO_BY_FIELD[{ tiltMag: 'saddle_tilt', tiltDir: 'saddle_tilt', floorMag: 'floor_tilt', floorDir: 'floor_tilt',
-    saddleLength: 'saddle_length', crankLength: 'crank_length', stringLength: 'string_length', crankWidth: 'crank_width', frontAxleWidth: 'front_axle_width', rearAxleWidth: 'rear_axle_width', seatBb: 'seated_bb', seatBc: 'seated_bc' }[info.field]];
+    saddleLength: 'saddle_length', sitPoint: 'sit_point', saddleModel: 'saddle_model', saddleRail: 'saddle_rail',
+    frameStack: 'frame_stack', frameReach: 'frame_reach', pedalStack: 'pedal_stack', pedalStackSource: 'pedal_stack_source', crankLength: 'crank_length', stringLength: 'string_length', crankWidth: 'crank_width', frontAxleWidth: 'front_axle_width', rearAxleWidth: 'rear_axle_width', seatBb: 'seated_bb', seatBc: 'seated_bc' }[info.field]];
   const tape = info.tape
     ? `<p class="bf-def-line">Tape straight from ${esc(info.tape.from)} to ${esc(info.tape.to)}.</p>`
     : info.floor ? `<p class="bf-def-line">Tape straight down from ${esc(info.floor)} to the floor.</p>` : '';
@@ -137,10 +139,11 @@ const WIDTH_FALLBACK = {
   mtb: `crank bolts ${WIDTH_DEFAULTS_MM.mtb.crank}, front axle ${WIDTH_DEFAULTS_MM.mtb.fa}, rear axle ${WIDTH_DEFAULTS_MM.mtb.ra} mm`,
 };
 
-function textField({ field, label, value }) {
+function textField({ field, label, value, required = false, hint = '' }) {
   return `
-    <label class="field bf-field"><span>${esc(label)} <i class="bf-opt">optional</i></span>
-      <input type="text" autocomplete="off" data-form="bikefit" data-field="${field}" aria-label="${esc(label)}" value="${esc(value)}"></label>`;
+    <label class="field bf-field"><span>${esc(label)}${required ? '' : ' <i class="bf-opt">optional</i>'}</span>
+      <input type="text" autocomplete="off" data-form="bikefit" data-field="${field}" aria-label="${esc(label)}" value="${esc(value)}">
+      ${hint ? `<span class="bf-hint">${esc(hint)}</span>` : ''}</label>`;
 }
 
 function numField({ field, label, value, hint, mode = 'numeric', unit = 'mm', required = false, n = null, extra = '' }) {
@@ -213,9 +216,12 @@ function renderForm({ form, errors, submit, online }) {
       <h4 class="bf-sub">Tape measures (mm)</h4>
       ${tapeGroups(form)}
       <h4 class="bf-sub">Saddle, cranks and bars</h4>
-      ${signedField({ dirField: 'tiltDir', magField: 'tiltMag', form, label: 'Saddle tilt', required: true, hint: HOW_TO_BY_FIELD.saddle_tilt + ' Enter 0 if level.' })}
+      ${signedField({ dirField: 'tiltDir', magField: 'tiltMag', form, label: 'Saddle tilt', required: true, hint: `${HOW_TO_BY_FIELD.saddle_tilt} Enter 0 if level. Recorded only; beyond \u00b1${TILT_ADVISORY_DEG}\u00b0 the results ask you to check it.` })}
       ${signedField({ dirField: 'floorDir', magField: 'floorMag', form, label: 'Floor reading, same device', hint: HOW_TO_BY_FIELD.floor_tilt })}
-      ${numField({ field: 'saddleLength', label: 'Saddle length', value: form.saddleLength, required: true, hint: HOW_TO_BY_FIELD.saddle_length })}
+      ${textField({ field: 'saddleModel', label: 'Saddle model', value: form.saddleModel, required: true, hint: HOW_TO_BY_FIELD.saddle_model })}
+      ${numField({ field: 'saddleLength', label: 'Saddle length (recorded only)', value: form.saddleLength, required: true, hint: HOW_TO_BY_FIELD.saddle_length })}
+      ${numField({ field: 'sitPoint', label: 'Sit-bone mark: distance from the saddle tip', value: form.sitPoint, required: true, mode: 'decimal', hint: `${HOW_TO_BY_FIELD.sit_point} ${SIT_POINT_NOTE}` })}
+      ${textField({ field: 'saddleRail', label: 'Saddle rail position note', value: form.saddleRail, hint: HOW_TO_BY_FIELD.saddle_rail })}
       ${numField({ field: 'crankLength', label: 'Crank length', value: form.crankLength, required: true, mode: 'decimal', hint: HOW_TO_BY_FIELD.crank_length })}
       ${numField({ field: 'stringLength', label: 'String length (contact width)', value: form.stringLength, required: true, hint: HOW_TO_BY_FIELD.string_length })}
       <h4 class="bf-sub">Widths, end to end (tape or caliper)</h4>
@@ -223,6 +229,16 @@ function renderForm({ form, errors, submit, online }) {
       ${numField({ field: 'crankWidth', label: 'Crank bolt width, outer face to outer face', value: form.crankWidth, hint: HOW_TO_BY_FIELD.crank_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].crank}"` })}
       ${numField({ field: 'frontAxleWidth', label: 'Front axle width, end to end', value: form.frontAxleWidth, hint: HOW_TO_BY_FIELD.front_axle_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].fa}"` })}
       ${numField({ field: 'rearAxleWidth', label: 'Rear axle width, end to end', value: form.rearAxleWidth, hint: HOW_TO_BY_FIELD.rear_axle_width, extra: `placeholder="${WIDTH_DEFAULTS_MM[form.bikeType].ra}"` })}
+      <h4 class="bf-sub">Frame and pedals (recorded, not used in the geometry)</h4>
+      ${numField({ field: 'frameStack', label: 'Frame stack from the maker', value: form.frameStack, hint: HOW_TO_BY_FIELD.frame_stack })}
+      ${numField({ field: 'frameReach', label: 'Frame reach from the maker', value: form.frameReach, hint: HOW_TO_BY_FIELD.frame_reach })}
+      ${numField({ field: 'pedalStack', label: 'Pedal stack (axle center to shoe sole, clipped in)', value: form.pedalStack, mode: 'decimal', hint: HOW_TO_BY_FIELD.pedal_stack })}
+      <label class="field bf-field"><span>Pedal stack source <i class="bf-opt">optional</i></span>
+        <select data-form="bikefit" data-field="pedalStackSource" aria-label="Pedal stack source">
+          <option value=""${form.pedalStackSource ? '' : ' selected'}></option>
+          <option value="maker_spec"${form.pedalStackSource === 'maker_spec' ? ' selected' : ''}>Maker spec</option>
+          <option value="measured"${form.pedalStackSource === 'measured' ? ' selected' : ''}>Measured</option>
+        </select></label>
       <h4 class="bf-sub">Bar details from the maker (recorded, not used)</h4>
       ${textField({ field: 'barModel', label: 'Bar model', value: form.barModel })}
       ${textField({ field: 'stemLength', label: 'Stem length', value: form.stemLength })}
@@ -290,7 +306,7 @@ function closureHtml(c) {
     ? `<p class="bf-hint">Values that depend on those tapes: ${esc(c.affected_outputs.join(', '))}.</p>` : '';
   return `
     <div class="bf-closure bf-closure-${cls}" data-closure="${c.status}">
-      <b>${word}</b>: four tapes (RA-FA, FA-H, RA-BC, BC-H) are compared with the geometry solved from the others. ${esc(c.message)}
+      <b>${word}</b>: five tapes (RA-FA, FA-H, RA-BC, BC-H, RA-S) and the entered sit-bone mark distance are compared with the geometry solved from the others. ${esc(c.message)}
       <div class="bf-table-wrap"><table class="bf-table bf-checks"><thead><tr><th scope="col">Check</th><th scope="col">Solved mm</th><th scope="col">Measured mm</th><th scope="col">Diff mm</th><th scope="col">Recheck / bad at</th><th scope="col">Status</th></tr></thead><tbody>${rows}</tbody></table></div>
       ${suspects}${affected}
       <p class="bf-hint">${esc(c.not_checked)}</p>
@@ -315,6 +331,28 @@ function assumptionsHtml(a, eff) {
     The hand point H is the string midpoint, on the centerline, with no lateral offset.</p>${effect}`;
 }
 
+function coordinatesHtml(d) {
+  const rows = d.coordinates.map((c) => `
+    <tr data-coord="${esc(c.key)}"><th scope="row">${esc(c.label)}</th>
+      <td class="mono">${esc(fmtValue(c.x, 'mm'))}</td><td class="mono bf-pm">${esc(fmtPm(c.sigma_x, 'mm'))}</td>
+      <td class="mono">${esc(fmtValue(c.y, 'mm'))}</td><td class="mono bf-pm">${esc(fmtPm(c.sigma_y, 'mm'))}</td></tr>`).join('');
+  return `<h4 class="bf-sub">Coordinates from the BB (mm)</h4>
+    <p class="bf-hint">X forward, Y up, level ground. Bar stack and reach are at the clamp (BC); hand reach and drop are at H, not at the clamp. Frame stack and reach are defined at the head tube top, which is not measured here.</p>
+    <div class="bf-table-wrap"><table class="bf-table bf-coords"><thead><tr><th scope="col">Point</th><th scope="col">X</th><th scope="col">±</th><th scope="col">Y</th><th scope="col">±</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function recordedHtml(d) {
+  const r = d.recorded;
+  const parts = [
+    ['Saddle', r.saddle_model], ['Saddle rail note', r.saddle_rail_note],
+    ['Saddle tilt', r.saddle_tilt_deg != null ? `${r.saddle_tilt_deg}\u00b0${r.floor_tilt_deg != null ? ` (floor reading ${r.floor_tilt_deg}\u00b0)` : ''}` : ''],
+    ['Saddle length', r.saddle_length_mm ? `${r.saddle_length_mm} mm` : ''],
+    ['Frame stack', r.frame_stack_mm != null ? `${r.frame_stack_mm} mm` : ''], ['Frame reach', r.frame_reach_mm != null ? `${r.frame_reach_mm} mm` : ''],
+    ['Pedal stack', r.pedal_stack_mm != null ? `${r.pedal_stack_mm} mm${r.pedal_stack_source ? ` (${r.pedal_stack_source === 'maker_spec' ? 'maker spec' : 'measured'})` : ''}` : ''],
+  ].filter(([, v]) => v);
+  return parts.length ? `<p class="bf-hint">Recorded, not used in the geometry: ${esc(parts.map(([k, v]) => `${k}: ${v}`).join('; '))}.</p>` : '';
+}
+
 export function renderResults(snap) {
   if (snap.error) {
     return `<div class="panel bf-panel"><h3 class="bf-kicker">${esc(snap.bike_name)}</h3><div class="conn-result fail">These measurements no longer solve: ${esc(snap.error)}</div></div>`;
@@ -330,14 +368,15 @@ export function renderResults(snap) {
       ${closureHtml(d.closure)}
       <h4 class="bf-sub">Unweighted${snap.bike_type === 'mtb' && !seated ? ' (only)' : ''}</h4>
       <p class="bf-hint">Ground direction uses a wheel-radius correction of ${d.radius_difference_mm.toFixed(1)} mm (front minus rear axle height), a ${d.ground_pitch_deg.toFixed(2)}° axle-line tilt.
-        Each ± is one standard deviation of tape error (${d.constants.tape_sigma_mm} mm per reading). Comparisons use the sit point (${d.constants.sit_fraction} of the saddle, tip to tail); the tip stays visible.</p>
+        Each ± is one standard deviation of tape error (${d.constants.tape_sigma_mm} mm per reading). Saddle figures use the measured sit-bone point S (${esc(String(d.recorded.sit_point_from_tip_mm))} mm from the tip, ${esc(d.recorded.saddle_model)}); tip-based setback stays alongside.</p>
+      ${coordinatesHtml(d)}
       <div class="bf-table-wrap"><table class="bf-table"><tbody>${valueRows(d.outputs)}</tbody></table></div>
       ${seated ? `
       <h4 class="bf-sub">Seated, under load</h4>
       <p class="bf-hint">Frame rotated ${fmtValue(seated.rotation_deg, 'deg')} (±${seated.rotation_sigma_deg.toFixed(2)}°) about the BB from the unweighted position (positive is nose up). ${esc(seated.assumption)}</p>
       <div class="bf-table-wrap"><table class="bf-table"><tbody>${valueRows(seated.outputs)}</tbody></table></div>` : ''}
       ${notes}
-      ${assumptionsHtml(d.assumptions, d.lateral_effect)}${barTextHtml(snap.inputs)}
+      ${assumptionsHtml(d.assumptions, d.lateral_effect)}${recordedHtml(d)}${barTextHtml(snap.inputs)}
       ${definitionList(d.outputs)}
     </div>`;
 }
@@ -375,8 +414,8 @@ export function renderOverlay(a, b) {
     const seg = (m, n) => `<line class="${cls}" x1="${q[m][0].toFixed(1)}" y1="${flip(q[m][1])}" x2="${q[n][0].toFixed(1)}" y2="${flip(q[n][1])}" />`;
     const dot = (id) => `<circle class="${cls} bf-ov-dot" cx="${q[id][0].toFixed(1)}" cy="${flip(q[id][1])}" r="14" />`;
     return wheel('RA', snap.derived.axle_heights_mm.rear) + wheel('FA', snap.derived.axle_heights_mm.front)
-      + seg('RA', 'BB') + seg('BB', 'FA') + seg('BB', 'ST') + seg('ST', 'SRP') + seg('BB', 'BC') + seg('BC', 'H')
-      + dot('BB') + dot('ST') + dot('SRP') + dot('H');
+      + seg('RA', 'BB') + seg('BB', 'FA') + seg('BB', 'ST') + seg('ST', 'S') + seg('BB', 'BC') + seg('BC', 'H')
+      + dot('BB') + dot('ST') + dot('S') + dot('H');
   };
   return `
     <figure class="bf-overlay">
@@ -385,8 +424,20 @@ export function renderOverlay(a, b) {
         ${bike(a, 'bf-ov-a')}${bike(b, 'bf-ov-b')}
         <circle class="bf-ov-origin" cx="0" cy="0" r="22" />
       </svg>
-      <figcaption class="bf-hint">Aligned at the BB (ring), unweighted, with the sit point (SRP) marked. <span class="bf-key bf-key-a"></span> A: ${esc(snapLabel(a))} &nbsp; <span class="bf-key bf-key-b"></span> B: ${esc(snapLabel(b))}. Skeleton lines join measured points only: not frame tubes.</figcaption>
+      <figcaption class="bf-hint">Aligned at the BB (ring), unweighted, with the sit-bone point (S) marked. <span class="bf-key bf-key-a"></span> A: ${esc(snapLabel(a))} &nbsp; <span class="bf-key bf-key-b"></span> B: ${esc(snapLabel(b))}. Skeleton lines join measured points only: not frame tubes.</figcaption>
     </figure>`;
+}
+
+function compareExtras(c) {
+  const saddle = c.saddle
+    ? `<p class="bf-hint" data-saddle-same="${c.saddle.same ? '1' : '0'}">Saddle: ${esc(c.saddle.model_a)} vs ${esc(c.saddle.model_b)}. ${c.saddle.same ? 'The models match, so the sit-point comparison is cleaner.' : 'The models differ, so sit-point rows also reflect the saddle shape.'}</p>` : '';
+  const k = c.crank;
+  const crank = k
+    ? `<p class="bf-hint" data-crank-diff="${k.diff_mm}">Crank length: ${k.a_mm} mm vs ${k.b_mm} mm, a difference of ${k.diff_mm > 0 ? '+' : ''}${k.diff_mm.toFixed(1)} mm (B minus A). On its own that changes sit point to pedal axle by ${k.pedal_down_effect_mm > 0 ? '+' : ''}${k.pedal_down_effect_mm.toFixed(1)} mm with the crank down and ${k.pedal_up_effect_mm > 0 ? '+' : ''}${k.pedal_up_effect_mm.toFixed(1)} mm with the crank up. Geometry only, not a recommendation.</p>` : '';
+  const p = c.pedal_stack;
+  const stack = p
+    ? `<div class="bf-note" data-pedal-stack="1">Pedal stack: ${p.a_mm} mm vs ${p.b_mm} mm, a difference of ${p.diff_mm > 0 ? '+' : ''}${p.diff_mm.toFixed(1)} mm. Sit point to pedal axle (crank down) adjusted for it: ${p.adjusted_pedal_down_diff_mm > 0 ? '+' : ''}${p.adjusted_pedal_down_diff_mm.toFixed(1)} mm \u00b1${p.sigma_diff_mm.toFixed(1)} (${p.exceeds_error ? 'exceeds' : 'within'} error). The \u00b1 includes a stated ${p.sigma_each_mm} mm per-snapshot assumption, independent of tape error. ${esc(p.note)}</div>` : '';
+  return `${saddle}${crank}${stack}`;
 }
 
 function renderCompare({ snapshots, compare }) {
@@ -401,7 +452,8 @@ function renderCompare({ snapshots, compare }) {
     const c = compare.data;
     body = `
       <p class="bf-hint">Difference is B minus A. &ldquo;Exceeds error&rdquo; means the difference is more than ${c.factor}&times; its combined ±, so smaller gaps should not be read as real.
-        Both snapshots use their sit point; saddles differ, so the tip rows are shown too.</p>
+        Both snapshots use their measured sit-bone point S; the tip rows are shown too.</p>
+      ${compareExtras(c)}
       ${c.notes.map((n) => `<p class="bf-note">${esc(n)}</p>`).join('')}
       ${compareTable(c.unweighted, c.a.bike_name, c.b.bike_name)}
       ${c.seated ? `<h4 class="bf-sub">Seated (both snapshots)</h4>${compareTable(c.seated, c.a.bike_name, c.b.bike_name)}` : ''}

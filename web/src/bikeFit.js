@@ -16,6 +16,7 @@ export function createBikeFitForm({ bikeType = 'drop_bar', today = '' } = {}) {
     name: '', bikeType, date: today, note: '', tireFront: '', tireRear: '',
     tiltDir: 'up', tiltMag: '', floorDir: 'up', floorMag: '',
     saddleLength: '', crankLength: '', stringLength: '',
+    sitPoint: '', saddleModel: '', saddleRail: '', frameStack: '', frameReach: '', pedalStack: '', pedalStackSource: '',
     crankWidth: '', frontAxleWidth: '', rearAxleWidth: '',
     barModel: '', stemLength: '', backsweep: '', upsweep: '',
     sagFront: '', sagRear: '', seatBb: '', seatBc: '',
@@ -105,6 +106,12 @@ export function serializeBikeFit(form) {
   const saddleLength = required(form.saddleLength, 'Saddle length', { min: 100, max: 400, exclusiveMin: false });
   const crankLength = required(form.crankLength, 'Crank length', { min: 140, max: 220, exclusiveMin: false });
   const stringLength = required(form.stringLength, 'String length (contact width)', { min: 100, max: 900, exclusiveMin: false });
+  const sitPoint = required(form.sitPoint, 'Sit-bone mark distance from the tip', { min: 20, max: 300, exclusiveMin: false });
+  if (!String(form.saddleModel || '').trim()) errors.push('Saddle model is required');
+  const frameStack = optional(form.frameStack, 'Frame stack', 1500);
+  const frameReach = optional(form.frameReach, 'Frame reach', 1500);
+  const pedalStack = optional(form.pedalStack, 'Pedal stack', 100);
+  if (!pedalStack && form.pedalStackSource) errors.push('Pedal stack source needs a pedal stack value');
   const seatBb = optional(form.seatBb, 'Seated floor to BB', 1500);
   const seatBc = optional(form.seatBc, 'Seated floor to BC', 2000);
   if ((seatBb === null) !== (seatBc === null)) errors.push('Give both seated heights (floor to BB and floor to BC) or neither');
@@ -116,7 +123,17 @@ export function serializeBikeFit(form) {
     saddle_length_mm: saddleLength,
     crank_length_mm: crankLength,
     string_length_mm: stringLength,
+    sit_point_from_tip_mm: sitPoint,
+    saddle_model: String(form.saddleModel).trim(),
   };
+  const rail = String(form.saddleRail || '').trim();
+  if (rail) inputs.saddle_rail_note = rail;
+  putOptional(inputs, 'frame_stack_mm', frameStack);
+  putOptional(inputs, 'frame_reach_mm', frameReach);
+  if (pedalStack) {
+    inputs.pedal_stack_mm = pedalStack;
+    if (form.pedalStackSource) inputs.pedal_stack_source = form.pedalStackSource;
+  }
   putOptional(inputs, 'floor_tilt_deg', floorTilt);
   const width = (text, label) => {
     const n = num(text);
@@ -191,6 +208,13 @@ const OTHER_FOCUS = {
   floorDir: { points: [], extra: null },
   floorMag: { points: [], extra: null },
   saddleLength: { points: ['ST'], extra: 'saddle' },
+  sitPoint: { points: ['ST', 'S'], extra: 'saddle' },
+  saddleModel: { points: ['S'], extra: 'saddle' },
+  saddleRail: { points: ['S'], extra: 'saddle' },
+  frameStack: { points: [], extra: null },
+  frameReach: { points: [], extra: null },
+  pedalStack: { points: ['BB'], extra: 'crank' },
+  pedalStackSource: { points: ['BB'], extra: 'crank' },
   crankLength: { points: ['BB'], extra: 'crank' },
   stringLength: { points: ['H'], extra: 'string' },
   crankWidth: { points: ['BB'], extra: null },
