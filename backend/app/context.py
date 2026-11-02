@@ -1265,6 +1265,28 @@ _BIKE_GEAR_WORD_ROUTES: dict[re.Pattern[str], set[str]] = {
 }
 _LIBRARY_FILES_IN_PRIORITY_ORDER.extend([_TIRE_PRESSURE_FILE, _BIKE_SETUP_FILE, _CLOTHING_FILE])
 
+# --- 47: bike fit measurement routing ---------------------------------------
+# Whole-phrase patterns with letter boundaries: bare "fit", "fitness", "bike
+# fitness", "setback", "reach" or "stack" must not route ("a setback in my
+# training", "I reach my goal"). "saddle height" also stays routed to 23 above;
+# both files can match.
+_BIKE_FIT_FILE = "47-bike-fit-measurement.md"
+_BIKE_FIT_PHRASES = (
+    r"bike[ -]fit(?:s|ting|ter|ters)?",
+    r"bike geometry",
+    r"saddle (?:height|tilt|angle|setback|position|fore)",
+    r"(?:reach and stack|stack and reach)",
+    r"(?:handlebar|bar) (?:drop|height)",
+    r"cleat (?:position|placement|fore)",
+    r"crank length",
+    r"(?:low )?back pain (?:on|from) (?:the |my )?(?:bike|bicycle)",
+    r"(?:low )?back pain (?:while|when) (?:riding|cycling)",
+)
+_BIKE_GEAR_WORD_ROUTES.update(
+    {re.compile(rf"(?<![a-z]){phrase}(?![a-z])"): {_BIKE_FIT_FILE} for phrase in _BIKE_FIT_PHRASES}
+)
+_LIBRARY_FILES_IN_PRIORITY_ORDER.append(_BIKE_FIT_FILE)
+
 # --- sport-scope filtering (Athlete.sports <-> library file sport scope) ---
 # IDEA 008's hard requirement, made structural (adversarial critique
 # objection 3: INDEX.md's own prose note alone had no code/test/model-field
@@ -1305,6 +1327,7 @@ _LIBRARY_FILE_SPORT_SCOPE: dict[str, frozenset[str]] = {
     "44-tire-pressure.md": frozenset({"bike"}),
     "45-bike-race-setup.md": frozenset({"bike"}),
     "46-cycling-clothing-temperature.md": frozenset({"bike"}),
+    "47-bike-fit-measurement.md": frozenset({"bike"}),
 }
 
 

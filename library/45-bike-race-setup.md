@@ -103,31 +103,12 @@ laps and check pad thickness after a wet race.
 
 ## 9. Contact points and fit (out of scope)
 
-This library does not provide a bike fit. A systematic review of knee pain in cyclists found limited
+This library does not provide a bike fit (see `47-bike-fit-measurement.md` for the geometry method). A systematic review of knee pain in cyclists found limited
 evidence, all retrospective (Bini and Bini (2018)). `Coach judgment:` change one contact point at a
 time in small steps, not before a key event; treat new pain as a stop-and-assess signal; refer to a
 qualified fitter.
 
 ## 10. Measuring bike geometry (`Coach judgment:`)
 
-No source covered this; it is a measuring method, not a fit method. Tape distances between marked
-points (BB bolt, front and rear axle ends, bar clamp, saddle tip, and a hand point) are solved by
-trilateration with sides fixed from the bike's layout, so nothing depends on the bike being level.
-The hand point is the midpoint of a string stretched between the left and right contact points
-(top center of each hood, or center of each grip, where the palm sits), so it sits on the centerline.
-Ground direction comes from the axle line, corrected by the floor-to-axle height difference. A sit
-reference point (the midpoint of the saddle, tip to tail, along its tilt) makes bikes with different
-saddles comparable; it is a reference, not a body position. Lateral offsets are half of measured
-widths (crank bolt faces, each axle end to end); a blank width uses a labelled fallback and is flagged.
-A 5 mm width error moves no output by more than about 0.25 mm.
-
-Four tapes (RA-FA, FA-H, RA-BC, BC-H) are not used to build the geometry but compared with it. A
-check warns at max(3 mm, 2.5 x its expected sd) and is flagged likely-bad beyond max(6 mm, 4 x sd)
-(the FA-H check is the noisiest, sd about 2.5 mm). At 1 mm tape error a seeded simulation of 3,000
-bikes gave 4% warnings and no flags; flat 3 and 6 mm limits gave 37% and 1.5%. In simulation a 12 mm
-typo in any one of the thirteen tapes trips at least one check; the pattern of failed checks names
-likely tapes as a hint only. The checks cannot see floor heights, saddle tilt, saddle length, crank
-length, string length or the widths. The +/- assumes 1 mm tape error and covers tape error only.
-Seated results (helper needed) treat the front triangle as rigid; an MTB with only unweighted results
-may understate how upright it rides. The drops are out of scope. It states no targets: fit changes
-belong to a fitter, and pain is stop-and-assess.
+Moved to `47-bike-fit-measurement.md`, which holds the tape method, its checks and limits. It is a
+measuring method, not a fit method.

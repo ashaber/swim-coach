@@ -2193,8 +2193,55 @@ def test_route_library_files_word_boundary_keywords_at_edges(message: str) -> No
     assert _TIRE_FILE in route_library_files(message, athlete_sports=["bike"])
 
 
+_FIT_FILE = "47-bike-fit-measurement.md"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Is my bike fit okay?",
+        "My bike fitter moved my saddle height",
+        "What saddle tilt should I use?",
+        "How much saddle setback is normal?",
+        "Does reach and stack matter on a CX bike?",
+        "Is my handlebar drop too big?",
+        "Where should my cleat position be?",
+        "Does crank length matter?",
+        "I get low back pain on the bike",
+        "Back pain when riding the MTB",
+        "Can you compare my bike geometry snapshots?",
+    ],
+)
+def test_route_library_files_bike_fit_phrases_reach_file(message: str) -> None:
+    assert _FIT_FILE in route_library_files(message, athlete_sports=["bike"])
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Does this workout fit my schedule?",
+        "My fitness is improving",
+        "How is my bike fitness this month?",
+        "I had a setback in my training",
+        "I want to reach my goal",
+        "Stack the hard days together",
+        "Low back pain after deadlifts",
+        "My back pain started after the long swim",
+        "Does the shoe fit?",
+        "That crank of a coach",
+    ],
+)
+def test_route_library_files_bike_fit_does_not_false_positive(message: str) -> None:
+    assert _FIT_FILE not in route_library_files(message, athlete_sports=["bike"]), message
+
+
+def test_route_library_files_bike_fit_excluded_for_swim_only() -> None:
+    for sports in (["swim_ow"], None):
+        assert _FIT_FILE not in route_library_files("What saddle height should I use?", athlete_sports=sports)
+
+
 def test_bike_gear_files_are_bike_sport_scoped() -> None:
     import app.context as context_module
 
-    for name in (_TIRE_FILE, _SETUP_FILE, _CLOTHING_FILE_NAME):
+    for name in (_TIRE_FILE, _SETUP_FILE, _CLOTHING_FILE_NAME, _FIT_FILE):
         assert context_module._LIBRARY_FILE_SPORT_SCOPE[name] == frozenset({"bike"})
