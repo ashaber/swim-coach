@@ -107,3 +107,17 @@ This library does not provide a bike fit. A systematic review of knee pain in cy
 evidence, all retrospective (Bini and Bini (2018)). `Coach judgment:` change one contact point at a
 time in small steps, not before a key event; treat new pain as a stop-and-assess signal; refer to a
 qualified fitter.
+
+## 10. Measuring bike geometry (`Coach judgment:`)
+
+No source covered this; it is a measuring method, not a fit method. Tape distances between six marked
+left-side points (BB bolt, front and rear axle ends, bar clamp, saddle tip, hand point) are solved by
+trilateration with sides fixed from the bike's layout, so nothing depends on the bike being level.
+Ground direction comes from the axle line, corrected by the floor-to-axle height difference. A
+sit reference point (the midpoint of the saddle, tip to tail, along its tilt) makes bikes with
+different saddles comparable; it is a reference, not a body position. The extra rear-axle tapes give
+a wheelbase closure check (warn at 3 mm, likely typo past 6 mm; it cannot see hand-point or floor-height
+errors). The +/- assumes 1 mm tape error and covers tape error only; lateral offsets are stated
+assumptions. Seated results (helper needed) treat the front triangle as rigid; an MTB with only
+unweighted results may understate how upright it rides. It states no targets: fit changes belong to a
+fitter, and pain is stop-and-assess.

@@ -54,3 +54,8 @@ cards:
   summary: A full bike fit is out of scope; knee-pain evidence is limited and retrospective.
   recommendation: Refer fit questions to a qualified fitter and treat new pain as stop-and-assess.
   content_hash: 0a725684e12bb134695a9484d5825042ca392479880e0a6e7252f9acb20da42f
+- section: 10-measuring-bike-geometry-coach-judgment
+  heading: 10. Measuring bike geometry (`Coach judgment:`)
+  summary: 'A measuring method, not a fit method: tape-distance trilateration with a wheelbase closure check and a stated 1 mm error; no targets.'
+  recommendation: Use it to record and compare geometry only; refer fit changes to a fitter.
+  content_hash: 5abcc9e05eb464295d0efce8174b19327798a4ceb73f94b08ff4a28525a7cb50
