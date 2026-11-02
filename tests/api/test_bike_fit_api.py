@@ -28,7 +28,7 @@ def body(truth: Truth = CX, name: str = "CX", **over) -> dict:
         "inputs": {
             "tape": {k: round(v, 1) for k, v in tapes_for(truth).items()},
             "saddle_tilt_deg": truth.tilt_deg, "saddle_length_mm": truth.saddle_len, "crank_length_mm": 172.5,
-            "bar_width_mm": truth.bar_width,
+            "string_length_mm": truth.string_len,
         },
     }
     payload.update(over)
@@ -61,7 +61,7 @@ def test_get_lists_snapshots_with_defaults_and_limits(client) -> None:
     post(client, body(MTB, "Trail"))
     data = client.get(URL, headers=auth_headers()).json()
     assert [s["bike_name"] for s in data["snapshots"]] == ["CX", "Trail"]
-    assert data["defaults"]["lateral_mm"]["mtb"]["fa"] == 55.0
+    assert data["defaults"]["width_mm"]["mtb"]["fa"] == 110.0
     assert "does not recommend" in data["limits"]
 
 
@@ -70,6 +70,8 @@ def test_get_lists_snapshots_with_defaults_and_limits(client) -> None:
     lambda b: b.update(bike_name="  "),
     lambda b: b["inputs"]["tape"].update(bb_fa=-4),
     lambda b: b["inputs"].pop("crank_length_mm"),
+    lambda b: b["inputs"]["tape"].pop("fa_h"),
+    lambda b: b["inputs"].pop("string_length_mm"),
     lambda b: b["inputs"].update(saddle_tilt_deg=80),
     lambda b: b["inputs"].update(seated_floor_bb_mm=300),
 ])

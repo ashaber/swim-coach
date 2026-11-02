@@ -35,6 +35,11 @@ def truth_metrics(t: Truth) -> dict[str, float]:
         "bb_to_hand_mm": math.hypot(*t.h),
         "effective_seat_angle_deg": math.degrees(math.atan2(srp[1], -srp[0])),
         "bb_drop_mm": axle_y_at_bb,
+        "clamp_to_hands_horizontal_mm": t.h[0] - t.bc[0],
+        "clamp_to_hands_vertical_mm": t.h[1] - t.bc[1],
+        "clamp_to_hands_mm": math.dist(t.bc, t.h),
+        "sit_to_pedal_down_mm": math.hypot(*srp) + 172.5,
+        "sit_to_pedal_up_mm": math.hypot(*srp) - 172.5,
     }
 
 
@@ -44,7 +49,8 @@ def test_round_trip_recovers_known_geometry_including_laterals(truth: Truth) -> 
     for key, want in truth_metrics(truth).items():
         assert out(res, key).value == pytest.approx(want, abs=0.05), key
     assert res.closure.status == "ok"
-    assert abs(res.closure.residual_mm) < 0.05
+    assert all(abs(c.residual_mm) < 0.05 for c in res.closure.checks)
+    assert res.assumptions["defaulted"] == []
 
 
 def test_wheelbase_is_the_measured_axle_distance_projected_on_the_ground() -> None:
@@ -63,26 +69,80 @@ def test_unequal_wheel_radius_is_corrected_via_axle_heights() -> None:
     assert good.radius_difference_mm == pytest.approx(-8.0, abs=0.01)
 
 
-def test_closure_flags_an_injected_typo_and_names_what_depends_on_it() -> None:
+DIST_TAPES = ["bb_fa", "bb_bc", "fa_bc", "bb_st", "bc_st", "ra_bb", "ra_st", "bb_h", "st_h", "bc_h",
+              "ra_fa", "fa_h", "ra_bc"]
+
+
+def residuals(res) -> list[float]:
+    return [c.residual_mm for c in res.closure.checks]
+
+
+@pytest.mark.parametrize("truth", [CX, MTB], ids=["cx", "mtb"])
+@pytest.mark.parametrize("tape", DIST_TAPES)
+def test_every_required_tape_trips_at_least_one_check_on_a_12_mm_typo(truth: Truth, tape: str) -> None:
+    t = tapes_for(truth)
+    res = compute_fit(inputs_for(truth, tape={tape: t[tape] + 12}), truth.bike_type)
+    assert res.closure.status == "bad", residuals(res)
+    assert max(abs(r) for r in residuals(res)) > bike_fit.CLOSURE_BAD_MM
+    assert tape in [s.measure for s in res.closure.suspects]  # the hint names the typo'd tape
+
+
+def test_typo_residual_pattern_matches_the_reference_simulation() -> None:
+    # reference sim, 12 mm typo, typical CX bike: residuals [RA-FA, FA-H, RA-BC] (abs, mm)
+    want = {"bb_fa": (11.6, 3.1, 0), "bb_bc": (1.3, 11.8, 9.0), "fa_bc": (1.3, 12.3, 0), "bb_st": (2.1, 0.8, 8.5),
+            "bc_st": (1.1, 10.8, 5.0), "ra_bb": (11.2, 0, 6.3), "ra_st": (1.8, 0, 8.3), "bb_h": (0, 14.5, 0),
+            "st_h": (0, 10.6, 0)}
+    for tape, expect in want.items():
+        res = compute_fit(inputs_for(CX, tape={tape: tapes_for(CX)[tape] + 12}), "drop_bar")
+        got = [abs(r) for r in residuals(res)[:3]]
+        assert got == pytest.approx(list(expect), abs=3.5), (tape, got)
+
+
+def test_the_check_pattern_lists_likely_suspects_only_as_a_hint() -> None:
+    res = compute_fit(inputs_for(CX, tape={"ra_st": tapes_for(CX)["ra_st"] + 12}), "drop_bar")
+    top = res.closure.suspects[0]
+    assert top.measure == "ra_st" and top.estimated_error_mm == pytest.approx(12.0, abs=1.5)
+    assert 0.9 <= top.fit <= 1.0
+    assert compute_fit(inputs_for(CX), "drop_bar").closure.suspects == []
+
+
+def test_floor_heights_are_not_covered_by_the_checks_and_the_message_says_so() -> None:
     t = tapes_for(CX)
-    bad = compute_fit(inputs_for(CX, tape={"bb_fa": t["bb_fa"] + 12}), "drop_bar")
-    assert bad.closure.status == "bad"
-    assert "bb_fa" in [s.measure for s in bad.closure.suspects]
-    assert "setback_sit_mm" in bad.closure.affected_outputs
+    res = compute_fit(inputs_for(CX, tape={"floor_fa": t["floor_fa"] + 12}), "drop_bar")
+    assert res.closure.status == "ok"
+    assert "floor heights" in res.closure.not_checked and "crank length" in res.closure.not_checked
 
 
-@pytest.mark.parametrize("err,status", [(1.0, "ok"), (4.0, "warn"), (8.0, "bad")])
+def test_false_alarm_rate_at_1_mm_tape_error_is_low_with_the_noise_scaled_thresholds() -> None:
+    import random
+
+    rng = random.Random(20261101)
+    base = tapes_for(CX)
+    warn = bad = 0
+    runs = 1500
+    for _ in range(runs):
+        noisy = {k: v + rng.gauss(0, bike_fit.TAPE_SIGMA_MM) for k, v in base.items()}
+        status = compute_fit(inputs_for(CX, tape=noisy), "drop_bar").closure.status
+        warn += status in ("warn", "bad")
+        bad += status == "bad"
+    assert bad / runs < 0.005
+    assert warn / runs < 0.08
+
+
+def test_closure_check_thresholds_scale_with_each_checks_noise() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    for c in res.closure.checks:
+        assert c.warn_mm >= bike_fit.CLOSURE_WARN_MM and c.bad_mm >= bike_fit.CLOSURE_BAD_MM
+        assert c.warn_mm == pytest.approx(max(3.0, 2.5 * c.sigma_mm))
+    fa_h = next(c for c in res.closure.checks if c.key == "fa_h")
+    assert fa_h.bad_mm > 6.0  # the noisiest check gets a wider band
+
+
+@pytest.mark.parametrize("err,status", [(1.0, "ok"), (5.0, "warn"), (8.0, "bad")])
 def test_closure_thresholds_ok_warn_bad(err: float, status: str) -> None:
-    # perturb the direct wheelbase tape: the solved chain is unchanged, so residual == err
     res = compute_fit(inputs_for(CX, tape={"ra_fa": tapes_for(CX)["ra_fa"] + err}), "drop_bar")
     assert res.closure.status == status
-    assert res.closure.residual_mm == pytest.approx(-err, abs=0.1)
-
-
-def test_a_passing_closure_says_what_it_cannot_check() -> None:
-    res = compute_fit(inputs_for(CX), "drop_bar")
-    assert res.closure.status == "ok"
-    assert "BB-H" in res.closure.message and "floor" in res.closure.message
+    assert res.closure.checks[0].residual_mm == pytest.approx(-err, abs=0.1)
 
 
 def test_closure_never_rejects() -> None:
@@ -129,14 +189,61 @@ def test_floor_tilt_reading_is_subtracted_from_saddle_tilt() -> None:
         out(ref, key).value, abs=1e-6)
 
 
-def test_lateral_defaults_follow_bike_type_and_are_reported_as_assumptions() -> None:
+def test_blank_widths_fall_back_to_labelled_defaults_and_are_flagged() -> None:
     inp = BikeFitInputs(tape=inputs_for(CX).tape, saddle_tilt_deg=0, saddle_length_mm=270, crank_length_mm=172.5,
-                        bar_width_mm=420)
+                        string_length_mm=420)
     res = compute_fit(inp, "drop_bar")
     lat = res.assumptions
     assert (lat["bb_mm"], lat["fa_mm"], lat["ra_mm"]) == (60.0, 50.0, 71.0)
-    assert lat["h_mm"] == 210.0 and lat["defaulted"] == ["bb", "fa", "ra"]
-    assert bike_fit.LATERAL_DEFAULTS_MM["mtb"]["fa"] == 55.0 and bike_fit.LATERAL_DEFAULTS_MM["mtb"]["ra"] == 74.0
+    assert lat["defaulted"] == ["crank", "fa", "ra"]
+    assert any("Assumed" in n for n in res.notes)
+    assert bike_fit.WIDTH_DEFAULTS_MM["mtb"] == {"crank": 140.0, "fa": 110.0, "ra": 148.0}
+
+
+def test_lateral_offset_is_half_the_measured_width() -> None:
+    res = compute_fit(inputs_for(CX, front_axle_width_mm=104.0), "drop_bar")
+    assert res.assumptions["fa_mm"] == 52.0 and "fa" not in res.assumptions["defaulted"]
+    assert res.assumptions["widths_mm"]["front_axle"] == 104.0
+
+
+def test_lateral_error_effect_is_computed_and_small() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    eff = res.lateral_effect
+    assert eff["width_error_mm"] == 5.0
+    assert 0 < eff["max_output_change_mm"] < 1.0  # a 5 mm width error moves nothing by a millimetre
+    assert set(eff["per_width_mm"]) == {"crank_bolt", "front_axle", "rear_axle"}
+
+
+def test_h_has_no_lateral_offset_so_string_length_does_not_change_the_geometry() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    b = compute_fit(inputs_for(CX).model_copy(update={"string_length_mm": 600.0}), "drop_bar")
+    assert [o.value for o in a.outputs] == [o.value for o in b.outputs]
+
+
+def test_clamp_to_hands_offset_is_reported_horizontal_and_vertical_relative_to_ground() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    assert out(res, "clamp_to_hands_horizontal_mm").value == pytest.approx(CX.h[0] - CX.bc[0], abs=0.05)
+    assert out(res, "clamp_to_hands_vertical_mm").value == pytest.approx(CX.h[1] - CX.bc[1], abs=0.05)
+
+
+def test_pedal_distances_are_saddle_height_plus_and_minus_crank_length() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    h = out(res, "saddle_height_mm").value
+    assert out(res, "sit_to_pedal_down_mm").value == pytest.approx(h + 172.5)
+    assert out(res, "sit_to_pedal_up_mm").value == pytest.approx(h - 172.5)
+    assert "not leg" in out(res, "sit_to_pedal_down_mm").definition
+
+
+def test_crank_length_is_required() -> None:
+    with pytest.raises(ValueError):
+        BikeFitInputs(tape=inputs_for(CX).tape, saddle_tilt_deg=0, saddle_length_mm=270, string_length_mm=420)
+
+
+def test_optional_bar_text_fields_are_recorded_not_used() -> None:
+    a = compute_fit(inputs_for(CX), "drop_bar")
+    inp = inputs_for(CX, bar_model="Zipp SL-70", stem_length="100", bar_backsweep="0", bar_upsweep="0")
+    assert inp.bar_model == "Zipp SL-70"
+    assert [o.value for o in compute_fit(inp, "drop_bar").outputs] == [o.value for o in a.outputs]
 
 
 def test_seated_orientation_rotates_the_front_triangle_about_the_bb() -> None:
@@ -191,7 +298,7 @@ def test_every_output_has_a_label_unit_and_definition() -> None:
     res = compute_fit(inputs_for(CX), "drop_bar")
     for o in res.outputs:
         assert o.label and o.unit in ("mm", "deg") and o.definition
-    assert "does not recommend" in res.limits
+    assert "does not recommend" in res.limits and "drops" in res.limits
 
 
 def test_points_for_drawing_match_the_known_geometry() -> None:

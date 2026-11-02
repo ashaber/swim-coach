@@ -40,8 +40,10 @@ def _snapshot_summary(snapshot: BikeFitSnapshot, result: FitResult) -> dict[str,
     }
     if result.closure.status != "ok":
         summary["closure_detail"] = {
-            "message": result.closure.message, "residual_mm": round(result.closure.residual_mm, 1),
-            "suspect_measures": [s.label for s in result.closure.suspects],
+            "message": result.closure.message,
+            "residuals_mm": {c.label: round(c.residual_mm, 1) for c in result.closure.checks},
+            "likely_tapes_hint": [s.label for s in result.closure.suspects],
+            "not_checked": result.closure.not_checked,
         }
     if result.seated is not None:
         summary["seated"] = {"rotation_deg": round(result.seated.rotation_deg, 2),

@@ -115,9 +115,11 @@ BikeType = Literal["drop_bar", "mtb"]
 
 
 class BikeFitTape(BaseModel):
-    """The twelve required tape readings, in mm, on the bike's LEFT side (see `bike_fit` for the
-    point definitions). `floor_fa`/`floor_ra` are floor-to-axle-centre heights: only their
-    difference is used (wheel-radius correction)."""
+    """The fifteen required readings, in mm (see `bike_fit` for the point definitions): thirteen
+    straight-line tapes (on the bike's LEFT side where a point is off the centerline) and two
+    floor-to-axle-center heights, of which only the difference is used (wheel-radius correction).
+    `ra_fa`, `fa_h`, `ra_bc` and `bc_h` are closure checks: they are compared with the solved
+    geometry, never used to build it."""
 
     model_config = {"frozen": True}
 
@@ -131,6 +133,9 @@ class BikeFitTape(BaseModel):
     bb_h: float = Field(gt=0, le=3000)
     st_h: float = Field(gt=0, le=3000)
     ra_fa: float = Field(gt=0, le=3000)
+    fa_h: float = Field(gt=0, le=3000)
+    ra_bc: float = Field(gt=0, le=3000)
+    bc_h: float = Field(gt=0, le=3000)
     floor_fa: float = Field(gt=0, le=1500)
     floor_ra: float = Field(gt=0, le=1500)
 
@@ -138,7 +143,9 @@ class BikeFitTape(BaseModel):
 class BikeFitInputs(BaseModel):
     """Raw measurements for one bike fit snapshot. Derived values are never stored: they are
     recomputed from these by `swim_coach.bike_fit.compute_fit`, so a method fix applies to old
-    snapshots. Lateral offsets left None mean "the bike-type default" (an assumption, stated)."""
+    snapshots. A width left None means "the bike-type default" (an assumption, stated); each
+    lateral offset from the centerline is half the measured width. `string_length_mm` is the
+    distance between the two contact points the hand-point string spans (recorded and shown)."""
 
     model_config = {"frozen": True}
 
@@ -147,10 +154,14 @@ class BikeFitInputs(BaseModel):
     floor_tilt_deg: float | None = Field(default=None, ge=-20, le=20)  # same device on the floor
     saddle_length_mm: float = Field(ge=100, le=400)
     crank_length_mm: float = Field(ge=140, le=220)
-    bar_width_mm: float = Field(ge=100, le=900)
-    lateral_bb_mm: float | None = Field(default=None, ge=0, le=400)
-    lateral_fa_mm: float | None = Field(default=None, ge=0, le=400)
-    lateral_ra_mm: float | None = Field(default=None, ge=0, le=400)
+    string_length_mm: float = Field(ge=100, le=900)
+    crank_bolt_width_mm: float | None = Field(default=None, ge=40, le=400)
+    front_axle_width_mm: float | None = Field(default=None, ge=40, le=400)
+    rear_axle_width_mm: float | None = Field(default=None, ge=40, le=400)
+    bar_model: str = Field(default="", max_length=80)  # recorded from the maker, not used in geometry
+    stem_length: str = Field(default="", max_length=40)
+    bar_backsweep: str = Field(default="", max_length=40)
+    bar_upsweep: str = Field(default="", max_length=40)
     sag_front_pct: float | None = Field(default=None, ge=0, le=100)
     sag_rear_pct: float | None = Field(default=None, ge=0, le=100)
     seated_floor_bb_mm: float | None = Field(default=None, gt=0, le=1500)

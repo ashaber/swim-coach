@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from swim_coach.athlete_time import athlete_today
 from swim_coach.bike_fit import (
     COMPARE_SIGMA_FACTOR,
-    LATERAL_DEFAULTS_MM,
+    WIDTH_DEFAULTS_MM,
     LIMITS_STATEMENT,
     SIT_FRACTION,
     TAPE_SIGMA_MM,
@@ -63,7 +63,7 @@ async def list_bike_fit(
     return {
         "snapshots": [snapshot_view(s) for s in profile.bike_fit_snapshots],
         "defaults": {
-            "lateral_mm": LATERAL_DEFAULTS_MM,
+            "width_mm": WIDTH_DEFAULTS_MM,
             "tape_sigma_mm": TAPE_SIGMA_MM,
             "sit_fraction": SIT_FRACTION,
             "compare_sigma_factor": COMPARE_SIGMA_FACTOR,
