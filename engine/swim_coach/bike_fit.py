@@ -24,7 +24,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from swim_coach.models import BikeFitInputs, BikeType
+from swim_coach.models import BikeFitInputs, BikeFitSnapshot, BikeType
 
 # Source: library/45-bike-race-setup.md section 10 -- every constant in this block is coach
 # judgment, stated there, and editable here.
@@ -413,3 +413,26 @@ def compare_fits(a: FitResult, b: FitResult) -> Comparison:
             notes.append(f"Snapshot {label} is an MTB with unweighted results only. " + MTB_UNWEIGHTED_NOTE)
     seated = _rows(a.seated.outputs, b.seated.outputs) if a.seated and b.seated else None
     return Comparison(factor=COMPARE_SIGMA_FACTOR, unweighted=_rows(a.outputs, b.outputs), seated=seated, notes=notes)
+
+
+def snapshot_view(snapshot: BikeFitSnapshot) -> dict:
+    """A stored snapshot as API data: the raw record plus values recomputed from it now (so a
+    method fix reaches old snapshots). An unsolvable record reports `derived: None` and an `error`."""
+    view = snapshot.model_dump(mode="json")
+    try:
+        view["derived"] = compute_fit(snapshot.inputs, snapshot.bike_type).model_dump(mode="json")
+        view["error"] = None
+    except BikeFitError as exc:
+        view["derived"] = None
+        view["error"] = str(exc)
+    return view
+
+
+def resolve_snapshot(snapshots: list[BikeFitSnapshot], ref: str) -> BikeFitSnapshot | None:
+    """A snapshot by id, or the newest non-retired one for a bike name (case-insensitive)."""
+    ref = ref.strip()
+    for s in snapshots:
+        if str(s.id) == ref:
+            return s
+    named = [s for s in snapshots if s.bike_name.lower() == ref.lower() and not s.retired]
+    return max(named, key=lambda s: s.date) if named else None

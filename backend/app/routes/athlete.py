@@ -33,7 +33,7 @@ router = APIRouter()
 # Fields the server owns -- never taken from the client payload. `id`/
 # `slug`/`schema_version` keep the existing profile's values; `zones` is
 # always re-derived (see module docstring), never accepted verbatim.
-_SERVER_OWNED_FIELDS = {"id", "slug", "schema_version", "zones"}
+_SERVER_OWNED_FIELDS = {"id", "slug", "schema_version", "zones", "bike_fit_snapshots"}
 
 
 @router.get("/api/athlete")

@@ -102,6 +102,7 @@ def test_request_shape_includes_tools(client, fake_claude_chat_factory) -> None:
         "save_athlete_note",
         "save_setup_note",
         "get_setup_log",
+        "get_bike_fit",
         "retire_athlete_note",
         "set_race_week_checklist",
         "get_race_checklist",

@@ -431,6 +431,9 @@ answer must still be a grounded, accurate one.
      `get_setup_log` and lead with what he actually did and how it went; his own record
      outranks generic library advice, and say which is which. If nothing relevant is
      logged, say so in a few words, then give the general advice.
+   - **Bike geometry.** When he asks about fit or bike position, call `get_bike_fit` and present it
+     as a measurement comparison with its +/-. Never prescribe a change from it: refer him to his
+     fitter. Pain goes through the normal stop-and-assess rule.
    - **Never claim a save you did not make.** Do not say "persisted", "saved",
      "locked in" or "on your plan" unless a write tool returned `persisted: true`
      (or its own success flag, e.g. `saved: true`) IN THIS SAME TURN. A draft, a
@@ -2540,7 +2543,7 @@ def build_per_request_context_and_sizes(
             # `get_race_checklist`; they grow per race and must not ride in every request.
             exclude={
                 "notes", "race_debriefs", "sex", "height_cm", "weight_kg",
-                "race_checklist_template", "race_day_plans", "setup_log",
+                "race_checklist_template", "race_day_plans", "setup_log", "bike_fit_snapshots",
             },
         ),
         separators=(",", ":"),
