@@ -1,0 +1,411 @@
+"""e2e: Resources > Bike geometry (measurement form, diagram highlight, draft, save, compare).
+
+Mocked backend only (same conventions as test_profile_edit.py): GET/POST/PATCH **/api/bike-fit* and
+GET **/api/bike-fit/compare. The derived numbers in the fixtures are canned: the engine's maths is
+covered by tests/unit/test_bike_fit.py, this file covers the browser flows.
+"""
+
+import json
+import re
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+from playwright.sync_api import sync_playwright
+
+from conftest import BROWSERS, seed_identity
+from test_profile_edit import (
+    BASE_URL, TOKEN, CORS_HEADERS, PROFILE_FIXTURE, _plan_route, _plan_load_route, _grants_route, _athlete_route,
+)
+
+LIMITS = ('This records and compares bike geometry. It does not recommend fit changes, give medical advice, '
+          'or state target angles.')
+
+TAPES = {'bb_fa': 612, 'bb_bc': 760, 'fa_bc': 590, 'bb_st': 705, 'bc_st': 640, 'ra_bb': 430, 'ra_st': 800,
+         'bb_h': 870, 'st_h': 700, 'bc_h': 120, 'ra_fa': 1025, 'fa_h': 880, 'ra_bc': 1010, 'floor_fa': 335, 'floor_ra': 330,
+         'bb_s': 719, 'bc_s': 640, 'ra_s': 690}
+
+
+def _output(key, label, unit, value, sigma):
+    return {'key': key, 'label': label, 'unit': unit, 'value': value, 'sigma': sigma,
+            'definition': f'definition of {label}', 'depends_on': []}
+
+
+def _checks(residual):
+    status = 'ok' if abs(residual) < 3 else 'warn' if abs(residual) < 6 else 'bad'
+    return [{'key': k, 'label': k.upper(), 'computed_mm': 1000.0, 'measured_mm': 1000.0 - residual,
+             'residual_mm': residual, 'sigma_mm': 1.7, 'warn_mm': 4.2, 'bad_mm': 6.8, 'status': status}
+            for k in ('ra_fa', 'fa_h', 'ra_bc', 'bc_h', 'ra_s', 'tip_s')]
+
+
+def _derived(bike_type, seated):
+    mtb = bike_type == 'mtb'
+    outputs = [
+        _output('setback_tip_mm', 'Saddle setback, tip', 'mm', 90.0 if mtb else 5.0, 1.8),
+        _output('setback_sit_mm', 'Saddle setback, sit point', 'mm', 225.0 if mtb else 140.0, 1.8),
+        _output('saddle_height_mm', 'Saddle height, BB to sit point', 'mm', 735.0 if mtb else 718.8, 1.1),
+        _output('reach_hand_mm', 'Reach, hand', 'mm', 561.0 if mtb else 560.0, 2.0),
+        _output('effective_seat_angle_deg', 'Effective seat angle', 'deg', 77.0 if mtb else 78.8, 0.14),
+    ]
+    out = {
+        'bike_type': bike_type, 'outputs': outputs,
+        'points': {'BB': [0, 0], 'FA': [600, 70], 'RA': [-420, 70], 'BC': [480, 640], 'ST': [-5, 705],
+                   'H': [560, 650], 'S': [-140, 703]},
+        'coordinates': [
+            {'key': 'st', 'label': 'Saddle tip (ST)', 'x': -5.0, 'y': 705.0, 'sigma_x': 1.1, 'sigma_y': 1.2},
+            {'key': 's', 'label': 'Sit-bone point (S)', 'x': -140.0, 'y': 703.0, 'sigma_x': 2.1, 'sigma_y': 1.0},
+            {'key': 'bc', 'label': 'Bar clamp (BC)', 'x': 480.0, 'y': 640.0, 'sigma_x': 1.0, 'sigma_y': 1.0},
+            {'key': 'h', 'label': 'Hand point (H)', 'x': 560.0, 'y': 650.0, 'sigma_x': 1.0, 'sigma_y': 1.0}],
+        'recorded': {'saddle_model': 'Test saddle', 'saddle_rail_note': '', 'saddle_tilt_deg': 0, 'floor_tilt_deg': None,
+                     'saddle_length_mm': 270, 'sit_point_from_tip_mm': 135, 'frame_stack_mm': None,
+                     'frame_reach_mm': None, 'pedal_stack_mm': None, 'pedal_stack_source': None},
+        'axle_heights_mm': {'front': 335, 'rear': 330},
+        'seated': None,
+        'closure': {'status': 'ok', 'message': 'All six checks close within tolerance.',
+                    'not_checked': 'The six checks cannot see the floor heights.', 'suspects': [],
+                    'affected_outputs': [], 'checks': _checks(0.2)},
+        'ground_pitch_deg': 0.28, 'radius_difference_mm': 5.0,
+        'assumptions': {'bb_mm': 60, 'fa_mm': 50, 'ra_mm': 71, 'defaulted': ['crank', 'fa', 'ra'],
+                        'widths_mm': {'crank_bolt': 120, 'front_axle': 100, 'rear_axle': 142}},
+        'lateral_effect': {'width_error_mm': 5.0, 'max_output_change_mm': 0.22, 'per_width_mm': {}},
+        'constants': {'tape_sigma_mm': 1.0},
+        'notes': [] if (seated or not mtb) else [
+            'Unweighted numbers only: rear sag normally rotates the frame back, so unweighted numbers may '
+            'understate how upright he actually rides this bike.'],
+        'limits': LIMITS,
+    }
+    if seated:
+        out['seated'] = {'rotation_deg': 2.1, 'rotation_sigma_deg': 0.1, 'assumption': 'rigid front triangle',
+                         'outputs': outputs[:3], 'points': out['points']}
+    return out
+
+
+class BikeFitBackend:
+    """A stateful stand-in for /api/bike-fit*: keeps saved snapshots, records POST bodies."""
+
+    def __init__(self):
+        self.snapshots = []
+        self.posts = []
+        self.fail_next_post = None
+        self.closure_status = 'ok'
+
+    def snapshot(self, payload):
+        seated = payload['inputs'].get('seated_floor_bb_mm') is not None
+        snap = {**payload, 'id': f'snap-{len(self.snapshots) + 1}', 'retired': False,
+                'derived': _derived(payload['bike_type'], seated), 'error': None}
+        if self.closure_status != 'ok':
+            snap['derived']['closure'].update(
+                status=self.closure_status, checks=_checks(-5.0 if self.closure_status == 'warn' else -9.0),
+                message='recheck the listed measures', affected_outputs=['setback_tip_mm'],
+                suspects=[{'measure': 'bb_fa', 'label': 'BB-FA', 'estimated_error_mm': 12.0, 'fit': 0.97}])
+        return snap
+
+    def handler(self, route):
+        req = route.request
+        path = req.url.split('?')[0]
+        if req.method == 'OPTIONS':
+            route.fulfill(status=204, headers=CORS_HEADERS)
+            return
+        if path.endswith('/api/bike-fit/compare'):
+            query = parse_qs(urlparse(req.url).query)
+            a, b = (next(s for s in self.snapshots if s['id'] == query[k][0]) for k in ('a', 'b'))
+            rows = []
+            for oa, ob in zip(a['derived']['outputs'], b['derived']['outputs']):
+                diff = ob['value'] - oa['value']
+                sd = (oa['sigma'] ** 2 + ob['sigma'] ** 2) ** 0.5
+                rows.append({'key': oa['key'], 'label': oa['label'], 'unit': oa['unit'], 'a': oa['value'],
+                             'b': ob['value'], 'diff': diff, 'sigma_a': oa['sigma'], 'sigma_b': ob['sigma'],
+                             'sigma_diff': sd, 'exceeds_error': abs(diff) > 2 * sd})
+            body = {'a': a, 'b': b, 'factor': 2.0, 'unweighted': rows, 'seated': None,
+                    'notes': ['Snapshot B is an MTB with unweighted results only.'],
+                    'saddle': {'model_a': 'Test saddle', 'model_b': 'Test saddle', 'same': True},
+                    'crank': {'a_mm': 172.5, 'b_mm': 170.0, 'diff_mm': -2.5, 'pedal_down_effect_mm': -2.5,
+                              'pedal_up_effect_mm': 2.5},
+                    'pedal_stack': None}
+        elif req.method == 'POST':
+            payload = json.loads(req.post_data or '{}')
+            self.posts.append(payload)
+            if self.fail_next_post:
+                status, message = self.fail_next_post
+                self.fail_next_post = None
+                route.fulfill(status=status, content_type='application/json', headers=CORS_HEADERS,
+                              body=json.dumps({'error': message}))
+                return
+            snap = self.snapshot(payload)
+            self.snapshots.append(snap)
+            body = snap
+        elif req.method == 'PATCH':
+            sid = path.rsplit('/', 1)[1]
+            snap = next(s for s in self.snapshots if s['id'] == sid)
+            snap['retired'] = json.loads(req.post_data)['retired']
+            body = snap
+        else:
+            body = {'snapshots': self.snapshots, 'limits': LIMITS,
+                    'defaults': {'width_mm': {}, 'tape_sigma_mm': 1.0}}
+        route.fulfill(status=200, content_type='application/json', body=json.dumps(body), headers=CORS_HEADERS)
+
+
+@pytest.fixture(params=BROWSERS)
+def bikefit_env(request, base_url):
+    cfg = request.param
+    backend = BikeFitBackend()
+    with sync_playwright() as pw:
+        try:
+            browser = getattr(pw, cfg['name']).launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f'{cfg["name"]} unavailable in this environment: {e}')
+        ctx = browser.new_context(viewport=cfg['vp'], service_workers='block')
+        seed_identity(ctx)
+        ctx.route('**/api/plan*', _plan_route)
+        ctx.route('**/api/plan/load*', _plan_load_route)
+        ctx.route('**/api/grants*', _grants_route)
+        ctx.route('**/api/athlete*', _athlete_route(get_body={**PROFILE_FIXTURE, 'sports': ['swim_pool', 'bike']}))
+        ctx.route(re.compile(r'/api/bike-fit'), backend.handler)
+        pg = ctx.new_page()
+        js_errors = []
+        pg.on('pageerror', lambda e: js_errors.append(str(e)))
+        pg.goto(base_url)
+        pg.evaluate(
+            "(cfg) => window.localStorage.setItem('swimcoach_settings', "
+            "JSON.stringify({baseUrl: cfg.baseUrl, token: cfg.token, version: 2}))",
+            {'baseUrl': BASE_URL, 'token': TOKEN},
+        )
+        pg.reload()
+        pg.click('[data-a="tab:resources"]')
+        pg.wait_for_selector('#bikefit-entry')
+        try:
+            yield pg, ctx, backend
+            real = [e for e in js_errors if 'sw.js load failed' not in e and 'Importing a module script failed' not in e]
+            assert not real, f'Uncaught JS errors: {real}'
+        finally:
+            ctx.close()
+            browser.close()
+
+
+def open_bike_fit(page):
+    page.click('[data-a="bikefit:open"]')
+    page.wait_for_selector('.bf-svg')
+
+
+def field(page, name):
+    return page.locator(f'[data-form="bikefit"][data-field="{name}"]')
+
+
+def fill_bike(page, name, bike_type, extra=None):
+    page.select_option('[data-field="bikeType"]', bike_type)
+    field(page, 'name').fill(name)
+    for key, value in TAPES.items():
+        field(page, key).fill(str(value))
+    field(page, 'tiltMag').fill('0')
+    field(page, 'saddleLength').fill('270')
+    field(page, 'crankLength').fill('172.5')
+    field(page, 'stringLength').fill('420' if bike_type == 'drop_bar' else '780')
+    field(page, 'saddleModel').fill('Test saddle')
+    field(page, 'sitPoint').fill('135')
+    for key, value in (extra or {}).items():
+        field(page, key).fill(str(value))
+
+
+def save(page):
+    page.click('[data-a="bikefit:save"]')
+    page.wait_for_selector('[data-results]')
+
+
+def test_reachable_from_settings_with_the_plain_statement(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    text = page.inner_text('.bf-wrap')
+    assert 'records geometry and doesn’t recommend changes' in text
+    assert page.locator('[data-a="bikefit:close"]').count() == 1
+    page.click('[data-a="bikefit:close"]')
+    page.wait_for_selector('#bikefit-entry')
+
+
+def test_mobile_layout_has_no_horizontal_scroll_and_numeric_keyboards(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth + 1')
+    assert field(page, 'bb_fa').get_attribute('inputmode') == 'numeric'
+    assert field(page, 'bb_fa').get_attribute('aria-label') == 'BB to FA in mm'
+    assert page.locator('.bf-svg').first.bounding_box()['width'] <= page.viewport_size['width']
+
+
+def test_focus_highlights_two_points_the_tape_line_and_exact_definitions(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    assert page.locator('.bf-pt.is-active').count() == 0
+    field(page, 'bb_bc').focus()
+    assert page.locator('.bf-pt.is-active').count() == 2
+    assert page.locator('.bf-pt.is-active').evaluate_all('els => els.map(e => e.dataset.point)') == ['BB', 'BC']
+    assert page.locator('.bf-tape').count() == 1
+    defs = page.inner_text('#bf-diagram .bf-defs')
+    assert 'center of the left crank bolt' in defs
+    assert "bar clamp, center of where the stem clamps the bar, on the bike's centerline" in defs
+    # the form was not re-rendered: the focused input is still the active element
+    assert page.evaluate('document.activeElement.dataset.field') == 'bb_bc'
+    field(page, 'bb_h').focus()
+    assert 'top centers of the left and right hoods' in page.inner_text('#bf-diagram .bf-defs')
+    page.select_option('[data-field="bikeType"]', 'mtb')
+    field(page, 'bb_h').focus()
+    assert 'centers of the left and right grips' in page.inner_text('#bf-diagram .bf-defs')
+    field(page, 'floor_ra').focus()
+    assert page.locator('.bf-pt.is-active').count() == 1
+    assert page.locator('.bf-tape').count() == 1
+
+
+def test_all_point_definitions_are_on_the_page_for_both_bikes(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    seen = set()
+    for key in ['bb_fa', 'bb_bc', 'bb_st', 'ra_bb', 'bb_h']:
+        field(page, key).focus()
+        seen.add(page.inner_text('#bf-diagram .bf-defs'))
+    joined = ' '.join(seen)
+    for text in ['center of the left crank bolt', 'center of the left front axle end', 'center of the left rear axle end',
+                 'saddle tip, on the centerline', 'midpoint of a string stretched between the top centers of the left and right hoods']:
+        assert text in joined
+
+
+def test_missing_fields_are_listed_and_nothing_is_posted(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    field(page, 'name').fill('CX')
+    page.click('[data-a="bikefit:save"]')
+    page.wait_for_selector('.bf-errors')
+    assert 'BB to FA' in page.inner_text('.bf-errors')
+    assert backend.posts == []
+
+
+def test_draft_survives_reload_and_offline(bikefit_env):
+    page, ctx, backend = bikefit_env
+    open_bike_fit(page)
+    field(page, 'name').fill('Half done')
+    field(page, 'bb_fa').fill('611')
+    ctx.set_offline(True)
+    page.evaluate("window.dispatchEvent(new Event('offline'))")
+    page.wait_for_selector('text=You are offline')
+    assert page.locator('[data-a="bikefit:save"]').is_disabled()
+    assert field(page, 'bb_fa').input_value() == '611'
+    field(page, 'bb_bc').fill('755')
+    ctx.set_offline(False)
+    page.evaluate("window.dispatchEvent(new Event('online'))")
+    page.reload()
+    page.click('[data-a="tab:resources"]')
+    open_bike_fit(page)
+    assert field(page, 'name').input_value() == 'Half done'
+    assert field(page, 'bb_fa').input_value() == '611'
+    assert field(page, 'bb_bc').input_value() == '755'
+    assert backend.posts == []
+
+
+def test_enter_both_bikes_save_and_compare(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    fill_bike(page, 'CX', 'drop_bar')
+    field(page, 'tireFront').fill('28')
+    save(page)
+    assert backend.posts[0]['bike_type'] == 'drop_bar'
+    assert backend.posts[0]['inputs']['tape']['bb_fa'] == 612
+    assert backend.posts[0]['inputs']['string_length_mm'] == 420
+    assert 'front_axle_width_mm' not in backend.posts[0]['inputs']  # blank width: fallback, flagged in results
+    assert backend.posts[0]['inputs']['tape']['bc_h'] == 120
+    assert backend.posts[0]['inputs']['tape']['bb_s'] == 719
+    assert backend.posts[0]['inputs']['sit_point_from_tip_mm'] == 135
+    assert backend.posts[0]['inputs']['saddle_model'] == 'Test saddle'
+    results = page.inner_text('[data-results]')
+    assert '±1.8' in results and 'Checks OK' in results and '(assumed fallback)' in results and 'cannot see the floor heights' in results
+    # the form was reset after saving; draft cleared
+    assert field(page, 'name').input_value() == ''
+
+    fill_bike(page, 'Trail', 'mtb', {'sagFront': '20', 'sagRear': '30'})
+    assert page.locator('.bf-inset').count() == 1  # the string and midpoint diagram
+    save(page)
+    assert backend.posts[1]['inputs']['sag_rear_pct'] == 30
+    assert 'Unweighted numbers only' in page.inner_text('[data-results]')
+
+    page.wait_for_selector('#bf-compare select')
+    page.select_option('[data-form="bikefit-compare"][data-field="a"]', 'snap-1')
+    page.select_option('[data-form="bikefit-compare"][data-field="b"]', 'snap-2')
+    page.click('[data-a="bikefit:compare"]')
+    page.wait_for_selector('table.bf-compare')
+    tip = page.locator('table.bf-compare tr[data-key="setback_tip_mm"]')
+    assert 'Exceeds error' in tip.inner_text()
+    assert page.locator('table.bf-compare tr[data-key="saddle_height_mm"]:has-text("Exceeds error")').count() == 1
+    assert page.locator('.bf-overlay .bf-ov-a').count() > 0 and page.locator('.bf-overlay .bf-ov-b').count() > 0
+    assert 'unweighted results only' in page.inner_text('#bf-compare')
+    compare_text = page.inner_text('#bf-compare')
+    assert 'Crank length: 172.5 mm vs 170 mm' in compare_text and 'The models match' in compare_text
+
+
+def test_a_rejected_save_keeps_the_draft_and_shows_the_error(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    fill_bike(page, 'CX', 'drop_bar')
+    backend.fail_next_post = (422, 'BB-BC, BB-ST and BC-ST cannot form a triangle')
+    page.click('[data-a="bikefit:save"]')
+    page.wait_for_selector('.conn-result.fail')
+    assert 'cannot form a triangle' in page.inner_text('.conn-result.fail')
+    assert field(page, 'bb_fa').input_value() == '612'
+
+
+def test_entry_is_hidden_for_athletes_without_bike_as_a_sport(bikefit_env):
+    page, ctx, _ = bikefit_env
+    ctx.route('**/api/athlete*', _athlete_route(get_body={**PROFILE_FIXTURE, 'sports': ['swim_pool']}))
+    page.reload()
+    page.click('[data-a="tab:resources"]')
+    page.wait_for_selector('text=Research library')
+    assert page.locator('#bikefit-entry').count() == 0
+
+
+def test_retire_marks_a_snapshot_without_deleting_it(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    fill_bike(page, 'CX', 'drop_bar')
+    save(page)
+    page.click('[data-a="bikefit:retire"]')
+    page.wait_for_selector('.bf-item.is-retired')
+    assert backend.snapshots[0]['retired'] is True
+    assert re.search('Restore', page.inner_text('.bf-item'))
+
+
+def test_sit_bone_point_s_is_on_the_diagram_and_its_fields_highlight_it(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    for bike_type in ('drop_bar', 'mtb'):
+        page.select_option('[data-field="bikeType"]', bike_type)
+        assert page.locator('.bf-svg [data-point="S"]').count() == 1
+        field(page, 'bb_s').focus()
+        assert page.locator('.bf-pt.is-active').evaluate_all('els => els.map(e => e.dataset.point)') == ['BB', 'S']
+        assert 'No standard exists' in page.inner_text('#bf-diagram .bf-defs')
+        field(page, 'sitPoint').focus()
+        assert page.locator('.bf-pt.is-active').evaluate_all('els => els.map(e => e.dataset.point)') == ['ST', 'S']
+    assert 'straightedge' in page.inner_text('.bf-wrap')
+    assert page.locator('[data-field="pedalStackSource"] option').count() == 3
+
+
+def test_results_show_coordinates_and_the_saved_payload_has_the_optional_fields(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    fill_bike(page, 'CX', 'drop_bar', {'pedalStack': '12', 'frameReach': '390', 'saddleRail': '2 mm back'})
+    page.select_option('[data-field="pedalStackSource"]', 'maker_spec')
+    save(page)
+    sent = backend.posts[0]['inputs']
+    assert (sent['pedal_stack_mm'], sent['pedal_stack_source'], sent['frame_reach_mm']) == (12, 'maker_spec', 390)
+    assert sent['saddle_rail_note'] == '2 mm back'
+    assert page.locator('[data-results] tr[data-coord]').count() == 4
+    text = page.inner_text('[data-results]')
+    assert 'Sit-bone point (S)' in text and 'Bar stack and reach are at the clamp' in text
+
+
+def test_string_method_diagram_and_steps_are_shown_and_measured_widths_are_sent(bikefit_env):
+    page, _, backend = bikefit_env
+    open_bike_fit(page)
+    assert page.locator('.bf-steps li').count() == 3
+    field(page, 'bc_h').focus()
+    assert page.locator('.bf-inset .bf-ipt.is-active').count() == 2
+    assert 'middle of the string' in page.inner_text('#bf-diagram .bf-defs')
+    fill_bike(page, 'CX', 'drop_bar', {'crankWidth': '121', 'frontAxleWidth': '100', 'rearAxleWidth': '142',
+                                       'barModel': 'Test bar'})
+    save(page)
+    sent = backend.posts[0]['inputs']
+    assert (sent['crank_bolt_width_mm'], sent['front_axle_width_mm'], sent['rear_axle_width_mm']) == (121, 100, 142)
+    assert sent['bar_model'] == 'Test bar'

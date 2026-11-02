@@ -1,0 +1,37 @@
+schema_version: 1
+file: 47-bike-fit-measurement.md
+added: '2026-11-01'
+cards:
+- section: 1-measuring-bike-geometry-coach-judgment
+  heading: 1. Measuring bike geometry (`Coach judgment:`)
+  summary: A tape method with a measured sit-bone point S, six noise-scaled checks and 1 mm error; flags and warnings are
+    measured in simulation. It records geometry only.
+  recommendation: Use it to record and compare geometry; refer fit changes to a fitter and say no standard exists for the
+    sit-bone point.
+  content_hash: bcdb910fcae6a34a04d5eb75439cac0225e586d71eb72dc329d350684950aa50
+- section: 2-saddle-sit-point-tilt-fore-aft-coach-judgment
+  heading: '2. Saddle: sit point, tilt, fore/aft (`Coach judgment:`)'
+  summary: Compare sit-point setback, not rail position. Tilt beyond about 4 degrees is only a check-the-measurement note.
+    Tilt and fore/aft back-pain ideas are unsourced practitioner lore.
+  recommendation: Label tilt and fore/aft back-pain ideas as unsourced lore and give no tilt number as a fix.
+  content_hash: c906629a214f540e5619a89adfcfa29486d80df2ee24a18444fb89376d066ee6
+- section: 3-fit-back-pain-and-posture-unreviewed
+  heading: 3. Fit, back pain and posture (UNREVIEWED)
+  summary: Low to moderate quality reviews link lower bars to more lumbar flexion; fitting appears to help back pain with
+    limited evidence. No CX data; the road-versus-MTB finding is a low-confidence inference.
+  recommendation: Say the evidence is limited, mostly road, abstract-level in places, and supports no specific tilt, drop
+    or reach number.
+  content_hash: dc2d5dc298a11b863d761bd41656cad610b01e4d2fc428dab00e4b781b558370
+- section: 4-crank-pedal-stack-static-versus-dynamic-tools
+  heading: 4. Crank, pedal stack, static versus dynamic, tools
+  summary: The tool shows crank length difference and, when both snapshots have it, pedal stack difference with a stated 3
+    mm uncertainty. Static and dynamic knee ranges differ by test condition.
+  recommendation: Report crank and stack differences as geometry only and never present knee-angle ranges as targets.
+  content_hash: 89ea60e292148dceedaab3205dfd2288512689eae8ddd925a9db56f81951dd36
+- section: 5-gaps-and-when-to-see-a-clinician-coach-judgment
+  heading: 5. Gaps and when to see a clinician (`Coach judgment:`)
+  summary: No peer-reviewed work found on suspension sag or CX dismounts; no standard for the sit-bone reference; no 2D-versus-3D
+    study. Night, constant or radiating pain, numbness or weakness need a clinician.
+  recommendation: Name these gaps, send red-flag pain to a clinician, treat any pain as stop-and-assess and leave decisions
+    to the fitter.
+  content_hash: 88753424f4e66831cdc551574cb4992c682ad65785093655272dbac6897a888b

@@ -111,6 +111,107 @@ class SetupLogEntry(BaseModel):
     temp_source: Literal["device", "athlete"] | None = None
 
 
+BikeType = Literal["drop_bar", "mtb"]
+
+
+class BikeFitTape(BaseModel):
+    """The eighteen required readings, in mm (see `bike_fit` for the point definitions): sixteen
+    straight-line tapes (on the bike's LEFT side where a point is off the centerline) and two
+    floor-to-axle-center heights, of which only the difference is used (wheel-radius correction).
+    `ra_fa`, `fa_h`, `ra_bc`, `bc_h` and `ra_s` are closure checks: they are compared with the solved
+    geometry, never used to build it. `bb_s` and `bc_s` place the sit-bone point S on the saddle
+    centerline; `ra_s` checks it (a BB-S error is a saddle-height error that the tip-to-S distance
+    cannot see), and the solved tip-to-S line is also checked against `sit_point_from_tip_mm`."""
+
+    model_config = {"frozen": True}
+
+    bb_fa: float = Field(gt=0, le=3000)
+    bb_bc: float = Field(gt=0, le=3000)
+    fa_bc: float = Field(gt=0, le=3000)
+    bb_st: float = Field(gt=0, le=3000)
+    bc_st: float = Field(gt=0, le=3000)
+    bb_s: float = Field(gt=0, le=3000)
+    bc_s: float = Field(gt=0, le=3000)
+    ra_bb: float = Field(gt=0, le=3000)
+    ra_st: float = Field(gt=0, le=3000)
+    bb_h: float = Field(gt=0, le=3000)
+    st_h: float = Field(gt=0, le=3000)
+    ra_s: float = Field(gt=0, le=3000)
+    ra_fa: float = Field(gt=0, le=3000)
+    fa_h: float = Field(gt=0, le=3000)
+    ra_bc: float = Field(gt=0, le=3000)
+    bc_h: float = Field(gt=0, le=3000)
+    floor_fa: float = Field(gt=0, le=1500)
+    floor_ra: float = Field(gt=0, le=1500)
+
+
+class BikeFitInputs(BaseModel):
+    """Raw measurements for one bike fit snapshot. Derived values are never stored: they are
+    recomputed from these by `swim_coach.bike_fit.compute_fit`, so a method fix applies to old
+    snapshots. A width left None means "the bike-type default" (an assumption, stated); each
+    lateral offset from the centerline is half the measured width. `string_length_mm` is the
+    distance between the two contact points the hand-point string spans (recorded and shown)."""
+
+    model_config = {"frozen": True}
+
+    tape: BikeFitTape
+    sit_point_from_tip_mm: float = Field(gt=20, le=300)  # tape mark on the centerline, from the saddle tip
+    saddle_model: str = Field(min_length=1, max_length=80)
+    saddle_rail_note: str = Field(default="", max_length=200)  # recorded only, free text
+    frame_stack_mm: float | None = Field(default=None, gt=0, le=1500)  # from the maker, recorded only
+    frame_reach_mm: float | None = Field(default=None, gt=0, le=1500)  # from the maker, recorded only
+    pedal_stack_mm: float | None = Field(default=None, gt=0, le=100)  # pedal axle center to shoe sole, clipped in
+    pedal_stack_source: Literal["maker_spec", "measured"] | None = None
+    saddle_tilt_deg: float = Field(ge=-45, le=45)  # positive = nose up
+    floor_tilt_deg: float | None = Field(default=None, ge=-20, le=20)  # same device on the floor
+    saddle_length_mm: float = Field(ge=100, le=400)
+    crank_length_mm: float = Field(ge=140, le=220)
+    string_length_mm: float = Field(ge=100, le=900)
+    crank_bolt_width_mm: float | None = Field(default=None, ge=40, le=400)
+    front_axle_width_mm: float | None = Field(default=None, ge=40, le=400)
+    rear_axle_width_mm: float | None = Field(default=None, ge=40, le=400)
+    bar_model: str = Field(default="", max_length=80)  # recorded from the maker, not used in geometry
+    stem_length: str = Field(default="", max_length=40)
+    bar_backsweep: str = Field(default="", max_length=40)
+    bar_upsweep: str = Field(default="", max_length=40)
+    sag_front_pct: float | None = Field(default=None, ge=0, le=100)
+    sag_rear_pct: float | None = Field(default=None, ge=0, le=100)
+    seated_floor_bb_mm: float | None = Field(default=None, gt=0, le=1500)
+    seated_floor_bc_mm: float | None = Field(default=None, gt=0, le=2000)
+
+    @model_validator(mode="after")
+    def _seated_pair(self) -> "BikeFitInputs":
+        if self.pedal_stack_source is not None and self.pedal_stack_mm is None:
+            raise ValueError("pedal stack source needs a pedal stack value")
+        if (self.seated_floor_bb_mm is None) != (self.seated_floor_bc_mm is None):
+            raise ValueError("seated floor-to-BB and floor-to-BC come as a pair: give both or neither")
+        return self
+
+
+class BikeFitSnapshot(BaseModel):
+    """A dated bike-geometry record. Immutable once saved except `retired`; never deleted --
+    `Athlete.bike_fit_snapshots` only grows, is read on demand (`get_bike_fit`), and is never
+    serialized into the per-request context."""
+
+    id: UUID
+    date: date
+    bike_name: str = Field(min_length=1, max_length=80)
+    bike_type: BikeType
+    note: str = Field(default="", max_length=1000)
+    tire_front_psi: float | None = Field(default=None, ge=0, le=200)
+    tire_rear_psi: float | None = Field(default=None, ge=0, le=200)
+    inputs: BikeFitInputs
+    retired: bool = False
+
+    @field_validator("bike_name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("bike_name must not be blank")
+        return v
+
+
 class RaceDebrief(BaseModel):
     """A structured record of a post-race (or post-key-session) interview -- what the coach and
     athlete learned, kept as durable history the way `AthleteNote` keeps preferences (never
@@ -305,6 +406,8 @@ class Athlete(BaseModel):
     race_debriefs: list[RaceDebrief] = Field(default_factory=list)
     # Durable tires/clothing/setup outcomes; read on demand via `get_setup_log`, excluded from context.
     setup_log: list[SetupLogEntry] = Field(default_factory=list)
+    # Dated bike-geometry measurements (raw inputs only); read via `get_bike_fit`, excluded from context.
+    bike_fit_snapshots: list[BikeFitSnapshot] = Field(default_factory=list)
     # Per-sport weekly training-day PATTERN -- the bike/strength/skills
     # counterpart to `pool_schedule` above (which only ever covered pool
     # days). Maps a session-kind key ("bike", "strength", "skills" -- free

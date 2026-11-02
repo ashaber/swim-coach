@@ -2238,7 +2238,7 @@ citations; no scientific claim attaches to these links):
 
 ---
 
-## Tires, bike setup, clothing (grounds `44`, `45`, `46`)
+## Tires, bike setup, clothing, bike fit (grounds `44`, `45`, `46`, `47`)
 
 - **✓ Maier T., Müller B., Allemann R., Steiner T., Wehrlin J.P. (2019)** — Rim width, rolling resistance and off-road XC speed — *J Sports Sci* 37(7). `44`.
 - **⚠ Bierman J. (2014)** — Tubeless vs latex vs butyl tube rolling resistance — Bicycle Rolling Resistance; drum test. `45`.
@@ -2272,6 +2272,14 @@ citations; no scientific claim attaches to these links):
 - **⚠ US National Weather Service; Garmin Edge manuals** — wind chill formula; temperature-reading note. `46`.
 - **⚠ Walsh A. (2026)** — What to Wear Cycling at Every Temperature — Roadman Cycling; practitioner. `46`.
 - **⚠ Boynton J. (2014)** — Racing Cyclocross in the Cold, Part 2 — TrainingPeaks; **Mayhew C. (2018)** — Cyclocross Magazine. `46`.
+- **✓ Streisfeld G.M. et al. (2017)** — Relationship between body positioning, muscle activity, and spinal kinematics in cyclists with and without low back pain: a systematic review — *Sports Health*. `47`.
+- **✓ Muyor J.M., Zabala M. (2016)** — Road cycling and mountain biking produces adaptations on the spine and hamstring extensibility — *Int J Sports Med* 37(1); catalogue abstract only. `47`.
+- **✓ Barrajon et al. (2026)** — Effects of bike-fitting on lower back pain in cyclists: a systematic review — *Cureus* 18(1). `47`.
+- **✓ Husband et al. (2024)** — Cycling position optimisation: a systematic review — *J Sports Sci* 42(15); abstract only. `47`.
+- **✓ Bini R., Hume P., Croft J. (2011)** — Effects of bicycle saddle height on knee injury risk and cycling performance — *Sports Med* 41(6). `47`.
+- **✓ Corbett, Bevins (2014)** — Differences in static and dynamic bike fit with 3D motion capture — *J Sci Cycling* 3(2); catalogue abstract only. `47`.
+- **✓ Scoz R.D. et al. (2021)** — Validation of a 3D camera system for cycling analysis — *Sensors* 21(13). `47`.
+- **~ Braeckevelt et al. (2019)** — The need for data-driven bike fitting: data study of subjective expert fitting — icSPORTS; conference abstract, not re-checked. `47`.
 
 ## Corrections log
 

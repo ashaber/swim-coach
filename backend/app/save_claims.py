@@ -78,6 +78,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "lookup_reference",
     "get_race_debriefs",
     "get_setup_log",
+    "get_bike_fit",
     "get_event_groups",
     "get_race_checklist",
     "get_workouts",

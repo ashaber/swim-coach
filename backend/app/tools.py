@@ -305,6 +305,7 @@ from swim_coach.session_lookup import (
 )
 from swim_coach.store import StoreInterface
 from swim_coach.temperature import device_temp_view, f_to_c
+from app.bike_fit_tool import handle_get_bike_fit as _handle_get_bike_fit
 from app.setup_log import MAX_ENTRIES as _SETUP_MAX, TEMP_WINDOW_C, device_temp_for, entry_view as _setup_entry_view, matches_temp
 from swim_coach.taper_search import (
     MIN_TAPER_RUNWAY_DAYS,
@@ -1276,6 +1277,25 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "temp_c": {"type": "number"},
             },
             "required": ["kind", "text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_bike_fit",
+        "description": (
+            "His dated bike-geometry measurements with +/- (default: newest per bike; `bike` filters by "
+            "name; compare_a/compare_b = snapshot ids or bike names for a difference table). Call when he "
+            "asks about fit or bike position. Measurements only: it does not recommend changes or give "
+            "target angles."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bike": {"type": "string"},
+                "compare_a": {"type": "string"},
+                "compare_b": {"type": "string"},
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -10488,6 +10508,7 @@ def build_tool_handlers(
         "get_race_checklist": lambda input_data: _handle_get_race_checklist(
             input_data, store=store, slug=slug
         ),
+        "get_bike_fit": lambda input_data: _handle_get_bike_fit(input_data, store=store, slug=slug),
         "update_race_checklist": lambda input_data: _handle_update_race_checklist(
             input_data, store=store, slug=slug
         ),

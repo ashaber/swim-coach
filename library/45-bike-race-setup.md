@@ -103,7 +103,12 @@ laps and check pad thickness after a wet race.
 
 ## 9. Contact points and fit (out of scope)
 
-This library does not provide a bike fit. A systematic review of knee pain in cyclists found limited
+This library does not provide a bike fit (see `47-bike-fit-measurement.md` for the geometry method). A systematic review of knee pain in cyclists found limited
 evidence, all retrospective (Bini and Bini (2018)). `Coach judgment:` change one contact point at a
 time in small steps, not before a key event; treat new pain as a stop-and-assess signal; refer to a
 qualified fitter.
+
+## 10. Measuring bike geometry (`Coach judgment:`)
+
+Moved to `47-bike-fit-measurement.md`, which holds the tape method, its checks and limits. It is a
+measuring method, not a fit method.

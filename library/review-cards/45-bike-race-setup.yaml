@@ -53,4 +53,9 @@ cards:
   heading: 9. Contact points and fit (out of scope)
   summary: A full bike fit is out of scope; knee-pain evidence is limited and retrospective.
   recommendation: Refer fit questions to a qualified fitter and treat new pain as stop-and-assess.
-  content_hash: 0a725684e12bb134695a9484d5825042ca392479880e0a6e7252f9acb20da42f
+  content_hash: 122faa1a37257b65e9020675bcbabcd3ef0672e429cbfd5ac4165a11692d79ee
+- section: 10-measuring-bike-geometry-coach-judgment
+  heading: 10. Measuring bike geometry (`Coach judgment:`)
+  summary: The geometry measuring method moved to library 47; this section is only a pointer.
+  recommendation: Point to library 47 for the method and its limits; fit changes belong to a fitter.
+  content_hash: d0032bc17df86e5111607b5f3b4b6385679b385f4095e8c70d2239ec373896d7

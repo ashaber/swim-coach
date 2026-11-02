@@ -28,6 +28,7 @@ import { renderChatMarkdown } from './markdown.js';
 import { createThreadState } from './conversation.js';
 import { getDraft } from './composerDrafts.js';
 import { renderChatPanel } from './chatPanel.js';
+import { renderBikeFitEntryPanel } from './bikeFitView.js';
 import { isSheetOpen, sheetKeyFor } from './threadSheet.js';
 import { buildHistoryFeed } from './history.js';
 import {
@@ -4137,6 +4138,7 @@ function renderLibraryFileView({ openFile, file, online }) {
 
 export function renderResourcesTab({
   cards, filter, sort = DEFAULT_LIBRARY_SORT, openFile, file, isAdmin, reviewDrafts, reviewSubmit, backendConfigured, online,
+  showBikeFit = false,
 }) {
   if (!backendConfigured) {
     return renderBackendNeededNotice('Resources needs you to sign in and set a backend URL and token first.');
@@ -4160,6 +4162,11 @@ export function renderResourcesTab({
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded cards.</div>' : ''}
+      ${showBikeFit ? `
+      <section>
+        <div class="s-head"><h2>Bike geometry</h2></div>
+        ${renderBikeFitEntryPanel()}
+      </section>` : ''}
       ${isAdmin ? `
       <section>
         <div class="s-head"><h2>Research library</h2></div>

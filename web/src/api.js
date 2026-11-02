@@ -500,6 +500,35 @@ export async function downloadGarminFit({ baseUrl, token, athlete = 'renee', ses
   }
 }
 
+// --- Bike geometry (backend/app/routes/bike_fit.py) ----------------------------------------
+// Dated tape-measure snapshots; the engine computes every derived number and +/-.
+
+/** GET {baseUrl}/api/bike-fit -- saved snapshots with derived values, defaults and the limits text. */
+export async function listBikeFit({ baseUrl, token, athlete }) {
+  return apiRequest({ baseUrl, token, path: `/api/bike-fit?athlete=${encodeURIComponent(athlete)}` });
+}
+
+/** POST {baseUrl}/api/bike-fit -- saves a new snapshot (see bikeFit.js's serializeBikeFit). */
+export async function saveBikeFit({ baseUrl, token, athlete, payload }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/bike-fit?athlete=${encodeURIComponent(athlete)}`, method: 'POST', body: payload,
+  });
+}
+
+/** GET {baseUrl}/api/bike-fit/compare -- difference table for two snapshots (ids). */
+export async function compareBikeFit({ baseUrl, token, athlete, a, b }) {
+  const q = `athlete=${encodeURIComponent(athlete)}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`;
+  return apiRequest({ baseUrl, token, path: `/api/bike-fit/compare?${q}` });
+}
+
+/** PATCH {baseUrl}/api/bike-fit/{id} -- the only edit a snapshot allows: set or clear `retired`. */
+export async function retireBikeFit({ baseUrl, token, athlete, id, retired }) {
+  return apiRequest({
+    baseUrl, token, path: `/api/bike-fit/${encodeURIComponent(id)}?athlete=${encodeURIComponent(athlete)}`,
+    method: 'PATCH', body: { retired },
+  });
+}
+
 /** PATCH {baseUrl}/api/athlete?athlete=<slug> -- saves edited profile fields
  * (see forms.js's serializeProfileForm for the payload shape). */
 export async function patchAthlete({ baseUrl, token, athlete, payload }) {
