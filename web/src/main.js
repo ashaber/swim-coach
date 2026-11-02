@@ -684,7 +684,11 @@ function renderTabContent() {
         myCoachUnread: myCoachUnreadCount(),
       });
     case 'resources':
+      if (state.bikeFit.open && backendConfigured && athleteHasBike()) {
+        return renderBikeFitView({ bikeFit: state.bikeFit, online: state.online });
+      }
       return renderResourcesTab({
+        showBikeFit: athleteHasBike(),
         cards: state.libraryCards,
         filter: state.libraryFilter,
         sort: state.librarySort,
@@ -738,7 +742,6 @@ function renderTabContent() {
         conversationsUnread: rosterConversationUnreadCount(),
       });
     case 'settings':
-      if (state.bikeFit.open && backendConfigured) return renderBikeFitView({ bikeFit: state.bikeFit, online: state.online });
       return renderSettingsTab({
         identity: state.identity,
         identityError: state.identityError,
@@ -3269,7 +3272,8 @@ async function loadPacing(workoutId) {
 // from anywhere (identity resolution, settings save, tab switch) without
 // double-fetching or fetching while the athlete is looking at another tab.
 function maybeLoadProfile() {
-  if (state.tab !== 'settings') return;
+  // Resources needs the profile too: its Bike geometry entry shows only for athletes with bike as a sport.
+  if (state.tab !== 'settings' && state.tab !== 'resources') return;
   if (!isConfigured(state.settingsForm, state.identity)) return;
   if (state.profileLoad.status === 'loading' || state.profileLoad.status === 'ready') return;
   loadProfile();
@@ -3522,10 +3526,16 @@ async function handleSubmitLibraryReview(decision, file, section, contentHash) {
   }
 }
 
-// --- Bike geometry (Settings > Bike geometry) -----------------------------------------------
+// --- Bike geometry (Resources > Bike geometry) -----------------------------------------------
 // Typing never re-renders (it would drop the keyboard): inputs write into state.bikeFit.form and
 // the local draft; focus swaps just the diagram panel. Only saving, comparing and the bike-type
 // select (which changes the lateral defaults) call render().
+
+// Bike geometry is for athletes with bike as a sport (profile.sports; unset means swim-only).
+// Not gated by role or isLibraryAdmin: that flag only controls the Resources library section.
+function athleteHasBike() {
+  return !!state.profileForm.sports?.includes('bike');
+}
 
 function handleOpenBikeFit() {
   const slug = athleteSlug();

@@ -1,4 +1,4 @@
-// Bike-geometry view (Settings > Bike geometry): a mobile-first measurement form with a
+// Bike-geometry view (Resources > Bike geometry): a mobile-first measurement form with a
 // side-view diagram that highlights the focused field's points, saved-snapshot results with +/-,
 // a closure check, a two-snapshot comparison and an overlay drawing. String-template renderers
 // over state; no DOM access except the exported in-place diagram refresh. Records and compares
@@ -385,11 +385,11 @@ export function renderBikeFitView({ bikeFit, online }) {
     <div class="wrap settings-wrap bf-wrap">
       <header class="mast">
         <div>
-          <span class="mark">swim-coach &middot; settings</span>
+          <span class="mark">swim-coach &middot; resources</span>
           <h1>Bike geometry</h1>
           <p class="sub">${esc(STATEMENT)}</p>
         </div>
-        <button type="button" class="btn-ghost" data-a="bikefit:close">Back to settings</button>
+        <button type="button" class="btn-ghost" data-a="bikefit:close">Back to resources</button>
       </header>
       <div class="panel bf-panel bf-sticky" id="bf-diagram-panel">
         <div id="bf-diagram">${renderDiagramPanel(form.bikeType, focus)}</div>

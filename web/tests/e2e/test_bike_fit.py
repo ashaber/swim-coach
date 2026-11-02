@@ -1,4 +1,4 @@
-"""e2e: Settings > Bike geometry (measurement form, diagram highlight, draft, save, compare).
+"""e2e: Resources > Bike geometry (measurement form, diagram highlight, draft, save, compare).
 
 Mocked backend only (same conventions as test_profile_edit.py): GET/POST/PATCH **/api/bike-fit* and
 GET **/api/bike-fit/compare. The derived numbers in the fixtures are canned: the engine's maths is
@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 from conftest import BROWSERS, seed_identity
 from test_profile_edit import (
-    BASE_URL, TOKEN, CORS_HEADERS, _plan_route, _plan_load_route, _grants_route, _athlete_route,
+    BASE_URL, TOKEN, CORS_HEADERS, PROFILE_FIXTURE, _plan_route, _plan_load_route, _grants_route, _athlete_route,
 )
 
 LIMITS = ('This records and compares bike geometry. It does not recommend fit changes, give medical advice, '
@@ -136,7 +136,7 @@ def bikefit_env(request, base_url):
         ctx.route('**/api/plan*', _plan_route)
         ctx.route('**/api/plan/load*', _plan_load_route)
         ctx.route('**/api/grants*', _grants_route)
-        ctx.route('**/api/athlete*', _athlete_route())
+        ctx.route('**/api/athlete*', _athlete_route(get_body={**PROFILE_FIXTURE, 'sports': ['swim_pool', 'bike']}))
         ctx.route(re.compile(r'/api/bike-fit'), backend.handler)
         pg = ctx.new_page()
         js_errors = []
@@ -148,7 +148,7 @@ def bikefit_env(request, base_url):
             {'baseUrl': BASE_URL, 'token': TOKEN},
         )
         pg.reload()
-        pg.click('[data-a="tab:settings"]')
+        pg.click('[data-a="tab:resources"]')
         pg.wait_for_selector('#bikefit-entry')
         try:
             yield pg, ctx, backend
@@ -265,7 +265,7 @@ def test_draft_survives_reload_and_offline(bikefit_env):
     ctx.set_offline(False)
     page.evaluate("window.dispatchEvent(new Event('online'))")
     page.reload()
-    page.click('[data-a="tab:settings"]')
+    page.click('[data-a="tab:resources"]')
     open_bike_fit(page)
     assert field(page, 'name').input_value() == 'Half done'
     assert field(page, 'bb_fa').input_value() == '611'
@@ -314,6 +314,15 @@ def test_a_rejected_save_keeps_the_draft_and_shows_the_error(bikefit_env):
     page.wait_for_selector('.conn-result.fail')
     assert 'cannot form a triangle' in page.inner_text('.conn-result.fail')
     assert field(page, 'bb_fa').input_value() == '612'
+
+
+def test_entry_is_hidden_for_athletes_without_bike_as_a_sport(bikefit_env):
+    page, ctx, _ = bikefit_env
+    ctx.route('**/api/athlete*', _athlete_route(get_body={**PROFILE_FIXTURE, 'sports': ['swim_pool']}))
+    page.reload()
+    page.click('[data-a="tab:resources"]')
+    page.wait_for_selector('text=Research library')
+    assert page.locator('#bikefit-entry').count() == 0
 
 
 def test_retire_marks_a_snapshot_without_deleting_it(bikefit_env):

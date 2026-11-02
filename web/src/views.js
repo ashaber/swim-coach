@@ -4138,6 +4138,7 @@ function renderLibraryFileView({ openFile, file, online }) {
 
 export function renderResourcesTab({
   cards, filter, sort = DEFAULT_LIBRARY_SORT, openFile, file, isAdmin, reviewDrafts, reviewSubmit, backendConfigured, online,
+  showBikeFit = false,
 }) {
   if (!backendConfigured) {
     return renderBackendNeededNotice('Resources needs you to sign in and set a backend URL and token first.');
@@ -4161,6 +4162,11 @@ export function renderResourcesTab({
         </div>
       </header>
       ${!online ? '<div class="chat-banner">Offline -- showing the last-loaded cards.</div>' : ''}
+      ${showBikeFit ? `
+      <section>
+        <div class="s-head"><h2>Bike geometry</h2></div>
+        ${renderBikeFitEntryPanel()}
+      </section>` : ''}
       ${isAdmin ? `
       <section>
         <div class="s-head"><h2>Research library</h2></div>
@@ -5322,7 +5328,6 @@ export function renderSettingsTab({
         <div id="google-signin-btn"></div>
         ${identityError ? `<div class="conn-result fail">${esc(identityError)}</div>` : ''}`}
       </div>
-      ${backendConfigured ? renderBikeFitEntryPanel() : ''}
       ${backendConfigured ? renderGrantsPanel({ grants, form: grantsForm, submit: grantsSubmit }) : ''}
       ${backendConfigured ? renderSportsThresholdsPanel({ form: profileForm, load: profileLoad }) : ''}
       ${backendConfigured ? renderProfilePanel({ form: profileForm, load: profileLoad, submit: profileSubmit }) : ''}
