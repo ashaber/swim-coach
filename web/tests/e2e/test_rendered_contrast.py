@@ -210,3 +210,34 @@ def test_markdown_table_in_coach_chat_contrast(base_url):
         assert_contrast(pg, 'coach chat markdown table')
     finally:
         _finish(pw, browser, ctx, errors)
+
+
+# --- Settings > Bike geometry: empty form, validation errors, closure banner, results, comparison, overlay ---
+
+from test_bike_fit import bikefit_env, open_bike_fit, fill_bike, save, field  # noqa: E402,F401
+
+
+def test_bike_fit_view_contrast(bikefit_env):
+    page, _, backend = bikefit_env
+    page.set_viewport_size({'width': 390, 'height': 844})
+    open_bike_fit(page)
+    field(page, 'bb_bc').focus()
+    assert_contrast(page, 'bike geometry: form with a highlighted field')
+    page.click('[data-a="bikefit:save"]')
+    page.wait_for_selector('.bf-errors')
+    assert_contrast(page, 'bike geometry: validation errors')
+    for status in ('warn', 'bad'):
+        backend.closure_status = status
+        fill_bike(page, f'CX {status}', 'drop_bar')
+        save(page)
+        page.wait_for_selector(f'[data-closure="{status}"]')
+        assert_contrast(page, f'bike geometry: results with {status} closure')
+    backend.closure_status = 'ok'
+    fill_bike(page, 'Trail', 'mtb', {'sagFront': '20', 'sagRear': '30', 'seatBb': '330', 'seatBc': '985'})
+    save(page)
+    page.select_option('[data-form="bikefit-compare"][data-field="a"]', 'snap-1')
+    page.select_option('[data-form="bikefit-compare"][data-field="b"]', 'snap-3')
+    page.click('[data-a="bikefit:compare"]')
+    page.wait_for_selector('table.bf-compare')
+    assert page.locator('.bf-beyond').count() > 0 and page.locator('.bf-within').count() > 0
+    assert_contrast(page, 'bike geometry: results, list and comparison with indicators')

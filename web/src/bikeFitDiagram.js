@@ -33,7 +33,7 @@ function dropBar() {
   const htt = [395, 539];
   const htb = [435, 421];
   return {
-    viewBox: '-790 -770 1760 1090',
+    viewBox: '-790 -850 1760 1170',
     points,
     floor: { x0: -790, x1: 970, y: -270 },
     wheelR: 340,
@@ -54,7 +54,7 @@ function dropBar() {
     extras: [`<ellipse class="bf-pedal" cx="25" cy="172" rx="48" ry="12" />`,
       `<circle class="bf-ring" cx="0" cy="0" r="86" />`],
     labels: {
-      BB: [-40, 100, 'end'], FA: [34, -34, 'start'], RA: [-32, -38, 'end'],
+      BB: [55, 95, 'start'], FA: [34, -34, 'start'], RA: [-32, -38, 'end'],
       BC: [-26, -46, 'end'], ST: [-8, -52, 'middle'], H: [20, -48, 'start'],
     },
   };
@@ -71,7 +71,7 @@ function fullSuspension() {
   const rocker = [-150, 380];
   const shockTop = [110, 510];
   return {
-    viewBox: '-840 -790 2000 1160',
+    viewBox: '-840 -870 2000 1240',
     points,
     floor: { x0: -840, x1: 1160, y: -335 },
     wheelR: 372,
@@ -95,8 +95,8 @@ function fullSuspension() {
       `<circle class="bf-ring" cx="0" cy="0" r="80" />`,
       `<circle class="bf-grip" cx="500" cy="-650" r="28" />`],
     labels: {
-      BB: [-40, 100, 'end'], FA: [36, -36, 'start'], RA: [-34, -38, 'end'],
-      BC: [-30, 14, 'end'], ST: [-8, -52, 'middle'], H: [40, -30, 'start'],
+      BB: [55, 95, 'start'], FA: [36, -36, 'start'], RA: [-34, -38, 'end'],
+      BC: [-40, -40, 'end'], ST: [-8, -52, 'middle'], H: [40, -30, 'start'],
     },
   };
 }
