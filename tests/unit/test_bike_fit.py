@@ -194,5 +194,12 @@ def test_every_output_has_a_label_unit_and_definition() -> None:
     assert "does not recommend" in res.limits
 
 
+def test_points_for_drawing_match_the_known_geometry() -> None:
+    res = compute_fit(inputs_for(CX), "drop_bar")
+    for name, want in (("BB", (0, 0)), ("FA", CX.fa), ("RA", CX.ra), ("BC", CX.bc), ("ST", CX.st), ("H", CX.h)):
+        assert res.points[name] == pytest.approx(list(want), abs=0.05), name
+    assert res.axle_heights_mm == {"front": CX.fa[1] - CX.floor_y, "rear": CX.ra[1] - CX.floor_y}
+
+
 def test_sit_reference_point_is_the_midpoint_of_the_saddle() -> None:
     assert bike_fit.SIT_FRACTION == 0.5

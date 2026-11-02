@@ -146,11 +146,14 @@ class SeatedResult(BaseModel):
     rotation_sigma_deg: float
     assumption: str
     outputs: list[FitValue]
+    points: dict[str, list[float]]  # seated level-frame points, BB origin (for drawing only)
 
 
 class FitResult(BaseModel):
     bike_type: str
     outputs: list[FitValue]
+    points: dict[str, list[float]]  # level-frame points, BB origin, x forward / y up (for drawing only)
+    axle_heights_mm: dict[str, float]  # floor to FA / RA axle center, as entered (about the wheel radius)
     seated: SeatedResult | None
     closure: Closure
     ground_pitch_deg: float  # axle line vs level ground implied by the wheel-radius difference
@@ -278,6 +281,10 @@ def _metrics(pts: dict) -> dict[str, float]:
     }
 
 
+def _point_lists(pts: dict) -> dict[str, list[float]]:
+    return {name.upper(): [q[0], q[1]] for name, q in pts.items()}
+
+
 def _everything(p: dict[str, float], lat: dict, tilt_deg: float, saddle_len: float) -> dict[str, float]:
     """Every scalar the engine reports, as one flat function of the tape vector (for the Jacobian)."""
     sol = _positions(p, lat, tilt_deg, saddle_len)
@@ -368,6 +375,7 @@ def compute_fit(inputs: BikeFitInputs, bike_type: BikeType | str) -> FitResult:
             rotation_deg=base["rotation_deg"], rotation_sigma_deg=sigma["rotation_deg"],
             assumption=SEATED_ASSUMPTION,
             outputs=[_value(k, base[f"s.{k}"], sigma[f"s.{k}"], jac[f"s.{k}"]) for k in _SEATED_KEYS_OUT],
+            points=_point_lists({n: _rot(q, math.radians(base["rotation_deg"])) for n, q in sol["pts"].items()}),
         )
     closure = _closure(base["closure.residual_mm"], jac["closure.residual_mm"], jac,
                        sol["computed_ra_fa"], sol["d"]["ra_fa"])
@@ -376,6 +384,8 @@ def compute_fit(inputs: BikeFitInputs, bike_type: BikeType | str) -> FitResult:
         notes.append(MTB_UNWEIGHTED_NOTE)
     return FitResult(
         bike_type=bike_type, outputs=outputs, seated=seated, closure=closure,
+        points=_point_lists(sol["pts"]),
+        axle_heights_mm={"front": inputs.tape.floor_fa, "rear": inputs.tape.floor_ra},
         ground_pitch_deg=math.degrees(sol["pitch"]),
         radius_difference_mm=inputs.tape.floor_fa - inputs.tape.floor_ra,
         assumptions=lat,
