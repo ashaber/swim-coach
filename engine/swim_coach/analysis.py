@@ -48,7 +48,7 @@ from swim_coach.swim_sets import (
     segment_swim,
     swim_pace_block,
 )
-from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests
+from swim_coach.power_curve import BEST_WINDOWS_DAYS, annotate_bests, race_window_curve
 
 if TYPE_CHECKING:
     from swim_coach.store import StoreInterface
@@ -114,7 +114,7 @@ SWIM_FIELDS: frozenset[str] = frozenset(
     }
 )
 BIKE_FIELDS: frozenset[str] = frozenset(
-    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", "prior_race_curve"}
+    {"intervals", "avg_power_w", "normalized_power_w", "power_curve", "free_ride", "mtb_dynamics", "course_sectors", "race_efficiency", "laps", "race_overview", "race_start", "finish_sprint", "prior_race_curve", "race_power_curve"}
 )
 
 
@@ -205,11 +205,8 @@ def _base_analytics(workout: Workout, ctx: AnalysisContext, **interval_kwargs) -
     )
 
 
-def annotate_power_curve_bests(workout: Workout, analytics: WorkoutAnalytics, ctx: AnalysisContext) -> WorkoutAnalytics:
-    """Fill the curve's 42/90-day-best comparison from the athlete's earlier rides' stored
-    curves (rides without a curve are skipped)."""
-    if not analytics.power_curve:
-        return analytics
+def _annotated_curve(workout: Workout, curve: list, ctx: AnalysisContext) -> list:
+    """`curve` with the 42/90-day-best comparison filled from the athlete's earlier rides' whole-file curves."""
     since = workout.date - timedelta(days=max(BEST_WINDOWS_DAYS))
     prior = [
         ((workout.date - w.date).days, w.analytics.power_curve)
@@ -219,7 +216,15 @@ def annotate_power_curve_bests(workout: Workout, analytics: WorkoutAnalytics, ct
         and w.analytics is not None
         and w.analytics.power_curve
     ]
-    return analytics.model_copy(update={"power_curve": annotate_bests(analytics.power_curve, prior)})
+    return annotate_bests(curve, prior)
+
+
+def annotate_power_curve_bests(workout: Workout, analytics: WorkoutAnalytics, ctx: AnalysisContext) -> WorkoutAnalytics:
+    """Fill the curve's 42/90-day-best comparison from the athlete's earlier rides' stored
+    curves (rides without a curve are skipped)."""
+    if not analytics.power_curve:
+        return analytics
+    return analytics.model_copy(update={"power_curve": _annotated_curve(workout, analytics.power_curve, ctx)})
 
 
 class DefaultAnalyzer(_CoachViewMixin):
@@ -358,17 +363,19 @@ class BikeAnalyzer(_CoachViewMixin):
         if ctx.kind == "race" and analytics.power_curve:
             curve = prior_race_curve(workout, ctx.prior_races, ctx.plan_range, ctx.history_start)
             analytics = analytics.model_copy(update={"prior_race_curve": curve})
-        analytics = self._with_race_view(analytics, laps, ctx)
+        analytics = self._with_race_view(workout, analytics, laps, ctx)
         return self._with_race_laps(analytics, laps, ctx)
 
-    def _with_race_view(self, analytics: WorkoutAnalytics, laps: Sequence, ctx: AnalysisContext) -> WorkoutAnalytics:
+    def _with_race_view(self, workout: Workout, analytics: WorkoutAnalytics, laps: Sequence, ctx: AnalysisContext) -> WorkoutAnalytics:
         """The race window, the first 40 s and a sprint to the line: only for a race with a start."""
         start = self._race_start_s(analytics, ctx) if ctx.kind == "race" else None
         if start is None or not ctx.series:
             return analytics
         end = finish_s(laps) or ctx.series["t_s"][-1] + 1
         overview = build_race_overview(ctx.series, start, end)
+        window_curve = race_window_curve(ctx.series, start, end)
         update = {
+            "race_power_curve": _annotated_curve(workout, window_curve, ctx) if window_curve else None,
             "race_overview": overview,
             "race_start": build_race_start_trace(ctx.series, start, ctx.previous_race_start),
             "finish_sprint": build_finish_sprint(ctx.series, end, overview.np_w) if overview and laps and finish_s(laps) else None,

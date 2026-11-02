@@ -359,6 +359,13 @@ function priorRaceView(prior) {
   };
 }
 
+/** The curve the race view shows as "this race": the engine's race-window curve (warm-up excluded) when the
+ * race has one, else the whole-file curve (a race with no detected start, or one analysed before the field existed). */
+export function raceCurveOf(analytics) {
+  const windowed = analytics?.race_power_curve;
+  return Array.isArray(windowed) && windowed.length > 0 ? windowed : analytics?.power_curve;
+}
+
 /** The power-curve panel model. `prior` undefined = the ordinary view; given (the engine's
  * `prior_race_curve`, or null) = the race view. */
 export function powerCurveView(curve, prior) {

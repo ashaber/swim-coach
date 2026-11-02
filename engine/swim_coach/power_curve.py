@@ -24,6 +24,8 @@ with the tool the athlete already looks at):
 
 from __future__ import annotations
 
+from bisect import bisect_left
+
 from swim_coach.models import PowerCurvePoint
 
 # Largest t_s gap still treated as a signal dropout (filled with 0 W). Beyond it the gap
@@ -147,6 +149,21 @@ def coach_summary(curve: list[PowerCurvePoint] | None) -> list[dict]:
         for p in curve
         if p.duration_s in COACH_DURATIONS_S
     ]
+
+
+def race_window_curve(series: dict | None, start_s: float, end_s: float) -> list[PowerCurvePoint] | None:
+    """The mean-maximal curve of only the samples in `[start_s, end_s)` on the ride's own `t_s` clock (the
+    clock the race overview and race start use), so a warm-up in the same file cannot enter it. It is
+    `power_curve()` on the clipped series: pauses, null samples and `start_s` follow the same conventions.
+    `None` for no series, no samples in the window, or an empty window."""
+    t_s = (series or {}).get("t_s")
+    if not t_s or end_s <= start_s:
+        return None
+    lo, hi = bisect_left(t_s, start_s), bisect_left(t_s, end_s)
+    if hi <= lo:
+        return None
+    power = series.get("power_w") or []
+    return power_curve({"t_s": t_s[lo:hi], "power_w": power[lo:hi]})
 
 
 def annotate_bests(

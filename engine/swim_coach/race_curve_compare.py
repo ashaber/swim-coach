@@ -13,6 +13,9 @@ uses. `cycling/mountain` splits again by length: a race of `ULTRA_MIN` or more i
 "MTB" (Coach judgment: the athlete's ultra MTB races must never be averaged with short XC ones). A race
 with no `sport_detail` cannot be classified and is left out, never guessed.
 
+Each race contributes its race-window curve (`WorkoutAnalytics.race_power_curve`, warm-up excluded) when it
+has one, else its whole-file curve; the latter are counted in `left_out` so the fallback is visible.
+
 The mean at a duration uses only races long enough to have that duration; the line stops where fewer than
 two races contribute, unless only one race exists (then it is shown as that single race).
 """
@@ -55,10 +58,16 @@ def _none(discipline: str | None, note: str, left_out: list[str]) -> PriorRaceCu
     return PriorRaceCurve(basis="none", discipline=discipline, label="Prior-race average", note=note, left_out=left_out)
 
 
+def _curve_of(w: Workout) -> list:
+    """The race's curve for the average: its race-window curve when it has one (a warm-up in the same file
+    stays out), else the whole-file curve."""
+    return w.analytics.race_power_curve or w.analytics.power_curve
+
+
 def _mean_points(races: Sequence[Workout]) -> list[PriorRaceCurvePoint]:
     by_duration: dict[int, list[int]] = {}
     for w in races:
-        for p in w.analytics.power_curve:
+        for p in _curve_of(w):
             by_duration.setdefault(p.duration_s, []).append(p.watts)
     floor = 1 if len(races) == 1 else MIN_RACES_PER_POINT
     return [
@@ -108,6 +117,9 @@ def prior_race_curve(
         if history_start is not None and history_start > year_start:
             note += f" Logged history starts {history_start.isoformat()}."
         return _none(discipline, note, left_out)
+    whole_file = [w for w in chosen if not w.analytics.race_power_curve]
+    if whole_file:
+        left_out.append(f"{len(whole_file)} earlier {discipline} race(s) averaged from the whole file (no race start detected)")
     return PriorRaceCurve(
         basis=basis, discipline=discipline, count=len(chosen), single=len(chosen) == 1,
         label=_label(discipline, chosen, basis), dates=[w.date for w in chosen],

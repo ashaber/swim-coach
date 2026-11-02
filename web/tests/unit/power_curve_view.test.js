@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRawAnalysis, powerCurveView } from '../../src/analysis.js';
+import { buildRawAnalysis, powerCurveView, raceCurveOf } from '../../src/analysis.js';
 
 describe('power curve and race starts', () => {
   const curve = [
@@ -28,6 +28,24 @@ describe('power curve and race starts', () => {
     expect(g.best.split(' ')).toHaveLength(2);
     expect(g.race).toBe(false);
     expect(g.hasPrior).toBe(false);
+  });
+
+  describe('race-window curve', () => {
+    const windowed = [{ duration_s: 1, watts: 900 }, { duration_s: 60, watts: 300 }];
+
+    it('is the race view source when present, else the whole-file curve (old rows lack the field)', () => {
+      expect(raceCurveOf({ power_curve: curve, race_power_curve: windowed })).toBe(windowed);
+      expect(raceCurveOf({ power_curve: curve })).toBe(curve);
+      expect(raceCurveOf({ power_curve: curve, race_power_curve: null })).toBe(curve);
+      expect(raceCurveOf({ power_curve: curve, race_power_curve: [] })).toBe(curve);
+      expect(raceCurveOf(undefined)).toBeUndefined();
+    });
+
+    it('shows no duration longer than the race window in the race table', () => {
+      const m = powerCurveView(raceCurveOf({ power_curve: curve, race_power_curve: windowed }), null);
+      expect(m.rows.map((r) => r[0])).toEqual(['1s', '1min']);
+      expect(m.rows[0][1]).toBe('900 W');
+    });
   });
 
   describe('race view', () => {
