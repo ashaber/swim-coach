@@ -220,7 +220,10 @@ from test_bike_fit import bikefit_env, open_bike_fit, fill_bike, save, field  # 
 def test_bike_fit_view_contrast(bikefit_env):
     page, _, backend = bikefit_env
     page.set_viewport_size({'width': 390, 'height': 844})
+    backend.setup_notes = [{'id': 'n1', 'date': '2025-05-01', 'text': 'Professional fit, saddle height 75.2 cm',
+                            'pressure_front_psi': 18, 'pressure_rear_psi': 19}]
     open_bike_fit(page)
+    page.wait_for_selector('#bf-setup-notes')
     field(page, 'bb_bc').focus()
     assert_contrast(page, 'bike geometry: form with a highlighted field')
     page.click('[data-a="bikefit:save"]')

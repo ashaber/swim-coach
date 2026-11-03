@@ -87,6 +87,7 @@ class BikeFitBackend:
         self.posts = []
         self.fail_next_post = None
         self.closure_status = 'ok'
+        self.setup_notes = []
 
     def snapshot(self, payload):
         seated = payload['inputs'].get('seated_floor_bb_mm') is not None
@@ -139,7 +140,7 @@ class BikeFitBackend:
             snap['retired'] = json.loads(req.post_data)['retired']
             body = snap
         else:
-            body = {'snapshots': self.snapshots, 'limits': LIMITS,
+            body = {'snapshots': self.snapshots, 'limits': LIMITS, 'setup_notes': self.setup_notes,
                     'defaults': {'width_mm': {}, 'tape_sigma_mm': 1.0}}
         route.fulfill(status=200, content_type='application/json', body=json.dumps(body), headers=CORS_HEADERS)
 
@@ -409,3 +410,25 @@ def test_string_method_diagram_and_steps_are_shown_and_measured_widths_are_sent(
     sent = backend.posts[0]['inputs']
     assert (sent['crank_bolt_width_mm'], sent['front_axle_width_mm'], sent['rear_axle_width_mm']) == (121, 100, 142)
     assert sent['bar_model'] == 'Test bar'
+
+
+def test_fitter_setup_notes_are_shown_read_only_above_the_form(bikefit_env):
+    page, _, backend = bikefit_env
+    backend.setup_notes = [{'id': 'n1', 'date': '2025-05-01', 'text': 'Professional fit, Trek Boise.\nSaddle height 75.2 cm <b>x</b>',
+                            'pressure_front_psi': 18, 'pressure_rear_psi': 19}]
+    open_bike_fit(page)
+    block = page.locator('#bf-setup-notes')
+    block.wait_for()
+    text = block.inner_text()
+    assert "fitter's numbers and setup notes" in text.lower()
+    assert 'Saddle height 75.2 cm <b>x</b>' in text
+    assert 'Tires at the time: 18 psi front / 19 psi rear' in text
+    assert block.locator('input, button').count() == 0
+    assert block.bounding_box()['y'] < page.locator('.bf-sticky').bounding_box()['y']
+    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+
+
+def test_fitter_setup_notes_block_is_hidden_when_empty(bikefit_env):
+    page, _, _ = bikefit_env
+    open_bike_fit(page)
+    assert page.locator('#bf-setup-notes').count() == 0

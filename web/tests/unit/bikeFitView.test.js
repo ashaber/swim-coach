@@ -150,3 +150,29 @@ describe('whole view', () => {
     expect(svg).toContain('bf-ov-origin');
   });
 });
+
+describe('fitter setup notes block', () => {
+  const view = (setupNotes) => renderBikeFitView({ bikeFit: { ...createBikeFitState(), setupNotes }, online: true });
+  const note = (extra = {}) => ({ id: 'n1', date: '2025-05-01', text: 'Professional fit.\nSaddle height 75.2 cm', pressure_front_psi: 18, pressure_rear_psi: 19, ...extra });
+
+  it('lists each note above the form with its date, text and tire pressures', () => {
+    const html = view([note(), note({ id: 'n2', date: '2026-03-01', text: 'New cleats', pressure_front_psi: null, pressure_rear_psi: null })]);
+    expect(html).toContain("Fitter's numbers and setup notes");
+    expect(html).toContain('2025-05-01');
+    expect(html).toContain('Saddle height 75.2 cm');
+    expect(html).toContain('Tires at the time: 18 psi front / 19 psi rear');
+    expect(html.match(/Tires at the time/g)).toHaveLength(1);
+    expect(html.indexOf("Fitter's numbers")).toBeLessThan(html.indexOf('data-form="bikefit"'));
+  });
+
+  it('is absent when there are no notes', () => {
+    expect(view([])).not.toContain('Fitter');
+    expect(renderBikeFitView({ bikeFit: createBikeFitState(), online: true })).not.toContain('Fitter');
+  });
+
+  it('escapes html in note text', () => {
+    const html = view([note({ text: 'bars <b>wide</b> & low' })]);
+    expect(html).toContain('bars &lt;b&gt;wide&lt;/b&gt; &amp; low');
+    expect(html).not.toContain('<b>wide</b>');
+  });
+});
