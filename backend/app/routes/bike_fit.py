@@ -29,6 +29,7 @@ from swim_coach.bike_fit import (
 from swim_coach.models import Athlete, BikeFitSnapshot
 
 from app.auth import Principal, require_auth, resolve_athlete
+from app.bike_fit_tool import bike_setup_entries
 from app.logging_config import get_logger
 from app.store_factory import make_store
 
@@ -69,6 +70,11 @@ async def list_bike_fit(
             "compare_sigma_factor": COMPARE_SIGMA_FACTOR,
         },
         "limits": LIMITS_STATEMENT,
+        "setup_notes": [
+            {"id": str(e.id), "date": e.date.isoformat(), "text": e.text,
+             "pressure_front_psi": e.pressure_front_psi, "pressure_rear_psi": e.pressure_rear_psi}
+            for e in bike_setup_entries(profile)
+        ],
     }
 
 

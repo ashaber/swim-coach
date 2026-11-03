@@ -17,7 +17,7 @@ from swim_coach.bike_fit import (
     compute_fit,
     resolve_snapshot,
 )
-from swim_coach.models import BikeFitSnapshot
+from swim_coach.models import Athlete, BikeFitSnapshot, SetupLogEntry
 
 from app.logging_config import get_logger
 from app.tool_errors import storage_error
@@ -25,6 +25,16 @@ from app.tool_errors import storage_error
 log = get_logger(__name__)
 
 MAX_SNAPSHOTS = 6
+
+
+def bike_setup_entries(athlete: Athlete) -> list[SetupLogEntry]:
+    """The athlete's `bike_setup` setup-log entries (professional fit records, notes), newest first."""
+    return sorted((e for e in athlete.setup_log if e.kind == "bike_setup"), key=lambda e: e.date, reverse=True)
+
+
+def _setup_notes(athlete: Athlete) -> list[dict[str, Any]]:
+    return [{"date": e.date.isoformat(), "text": e.text, "pressure_front_psi": e.pressure_front_psi,
+             "pressure_rear_psi": e.pressure_rear_psi} for e in bike_setup_entries(athlete)]
 
 
 def _values(outputs: list[FitValue]) -> dict[str, dict[str, Any]]:
@@ -103,6 +113,7 @@ def handle_get_bike_fit(input_data: dict[str, Any], *, store: Any, slug: str) ->
                 "notes": comparison.notes,
             },
             "limits": LIMITS_STATEMENT,
+            "setup_notes": _setup_notes(athlete),
         }
     out: list[dict[str, Any]] = []
     for snap in _selected(snapshots, input_data.get("bike")):
@@ -111,4 +122,4 @@ def handle_get_bike_fit(input_data: dict[str, Any], *, store: Any, slug: str) ->
         except BikeFitError as exc:
             out.append({"id": str(snap.id), "bike_name": snap.bike_name, "date": snap.date.isoformat(),
                         "error": str(exc)})
-    return {"snapshots": out, "limits": LIMITS_STATEMENT}
+    return {"snapshots": out, "limits": LIMITS_STATEMENT, "setup_notes": _setup_notes(athlete)}

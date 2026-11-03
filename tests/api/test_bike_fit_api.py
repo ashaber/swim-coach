@@ -176,3 +176,58 @@ def test_prompt_guidance_is_short_and_refers_to_the_fitter() -> None:
     assert "get_bike_fit" in PERSONA_AND_RULES
     line = next(ln for ln in PERSONA_AND_RULES.splitlines() if "get_bike_fit" in ln)
     assert "fitter" in PERSONA_AND_RULES[PERSONA_AND_RULES.index(line):][:900]
+
+
+def _setup_entry(kind: str, day: str, text: str, front: float | None = None, rear: float | None = None):
+    import uuid
+    from datetime import date
+
+    from swim_coach.models import SetupLogEntry
+
+    return SetupLogEntry(id=uuid.uuid4(), date=date.fromisoformat(day), kind=kind, text=text,
+                         pressure_front_psi=front, pressure_rear_psi=rear)
+
+
+def _add_setup(athletes_dir, *entries) -> None:
+    store = FileStore(base_dir=athletes_dir)
+    profile = store.load_athlete("renee")
+    profile.setup_log.extend(entries)
+    store.save_athlete(profile)
+
+
+def test_get_returns_only_bike_setup_notes_newest_first(client, athletes_dir) -> None:
+    _add_setup(
+        athletes_dir,
+        _setup_entry("bike_setup", "2025-05-01", "Professional fit, saddle height 75.2 cm", 18, 19),
+        _setup_entry("clothing", "2026-10-01", "knee warmers"),
+        _setup_entry("tires", "2026-09-01", "tubeless 2.4", 20, 22),
+        _setup_entry("bike_setup", "2026-03-01", "New cleats"),
+    )
+    notes = client.get(URL, headers=auth_headers()).json()["setup_notes"]
+    assert [n["date"] for n in notes] == ["2026-03-01", "2025-05-01"]
+    assert set(notes[0]) == {"id", "date", "text", "pressure_front_psi", "pressure_rear_psi"}
+    assert (notes[1]["pressure_front_psi"], notes[1]["pressure_rear_psi"]) == (18, 19)
+    assert notes[0]["pressure_front_psi"] is None
+
+
+def test_get_setup_notes_empty_when_none(client, athletes_dir) -> None:
+    _add_setup(athletes_dir, _setup_entry("clothing", "2026-10-01", "vest"))
+    assert client.get(URL, headers=auth_headers()).json()["setup_notes"] == []
+
+
+def test_tool_includes_setup_notes_even_without_snapshots(athletes_dir) -> None:
+    _add_setup(
+        athletes_dir,
+        _setup_entry("bike_setup", "2025-05-01", "Professional fit, crank 170 mm", 18, 19),
+        _setup_entry("tires", "2026-09-01", "tubeless 2.4", 20, 22),
+    )
+    h = build_tool_handlers(FileStore(base_dir=athletes_dir), slug="renee", expert_mode=False)
+    res = h["get_bike_fit"]({})
+    assert res["snapshots"] == []
+    assert res["setup_notes"] == [{"date": "2025-05-01", "text": "Professional fit, crank 170 mm",
+                                   "pressure_front_psi": 18, "pressure_rear_psi": 19}]
+
+
+def test_tool_description_mentions_fitter_notes_and_stays_short() -> None:
+    tool = next(t for t in TOOLS_SCHEMA if t["name"] == "get_bike_fit")
+    assert "fit notes" in tool["description"] and len(tool["description"]) < 800

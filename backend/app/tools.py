@@ -1286,7 +1286,9 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "His dated bike-geometry measurements with +/- (default: newest per bike; `bike` filters by "
             "name; compare_a/compare_b = snapshot ids or bike names for a difference table). Call when he "
             "asks about fit or bike position. Measurements only: it does not recommend changes or give "
-            "target angles."
+            "target angles. Also returns his bike setup / professional fit notes as written; a fitter's saddle "
+            "height (BB to top of saddle) and setback are measured differently from the snapshot's BB-to-sit-point "
+            "figures, so a few mm of difference is expected."
         ),
         "input_schema": {
             "type": "object",
