@@ -12,3 +12,4 @@ web/public/data/*.json
 
 # Supabase CLI local cache
 supabase/.temp/
+.env.local
