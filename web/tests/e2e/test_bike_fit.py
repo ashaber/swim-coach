@@ -10,7 +10,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 from conftest import BROWSERS, seed_identity
 from test_profile_edit import (
@@ -321,7 +321,7 @@ def test_enter_both_bikes_save_and_compare(bikefit_env):
     assert page.locator('.bf-inset').count() == 1  # the string and midpoint diagram
     save(page)
     assert backend.posts[1]['inputs']['sag_rear_pct'] == 30
-    assert 'Unweighted numbers only' in page.inner_text('[data-results]')
+    expect(page.locator('[data-results]')).to_contain_text('Unweighted numbers only')
 
     page.wait_for_selector('#bf-compare select')
     page.select_option('[data-form="bikefit-compare"][data-field="a"]', 'snap-1')
