@@ -31,6 +31,7 @@ export function createBikeFitState() {
     open: false,
     load: { status: 'idle', error: null },
     snapshots: [],
+    setupNotes: [],
     limits: '',
     form: createBikeFitForm(),
     formErrors: [],

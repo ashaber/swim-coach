@@ -3561,6 +3561,7 @@ async function loadBikeFit() {
   if (handleUnauthorized(result)) return;
   if (result.ok) {
     bf.snapshots = result.data.snapshots;
+    bf.setupNotes = result.data.setup_notes || [];
     bf.limits = result.data.limits;
     bf.load = { status: 'ready', error: null };
     log.info('bikefit.loaded', { athlete: athleteSlug(), count: bf.snapshots.length });

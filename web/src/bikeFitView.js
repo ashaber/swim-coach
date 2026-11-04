@@ -490,6 +490,16 @@ function renderList({ snapshots, selectedId }) {
 
 // --- Whole view ----------------------------------------------------------------------------
 
+function renderSetupNotes(notes) {
+  if (!notes || !notes.length) return '';
+  const items = notes.map((n) => {
+    const tires = n.pressure_front_psi != null && n.pressure_rear_psi != null
+      ? `<p class="bf-hint">Tires at the time: ${esc(n.pressure_front_psi)} psi front / ${esc(n.pressure_rear_psi)} psi rear</p>` : '';
+    return `<li class="bf-setup-note"><span class="bf-hint">${esc(n.date)}</span><p class="bf-setup-text">${esc(n.text)}</p>${tires}</li>`;
+  }).join('');
+  return `<div class="panel bf-panel" id="bf-setup-notes"><h3 class="bf-kicker">Fitter's numbers and setup notes</h3><ul class="bf-setup-list">${items}</ul></div>`;
+}
+
 export function renderBikeFitView({ bikeFit, online }) {
   const { form, load, snapshots, selectedId, compare, focus, submit, formErrors } = bikeFit;
   const selected = snapshots.find((s) => s.id === selectedId);
@@ -505,6 +515,7 @@ export function renderBikeFitView({ bikeFit, online }) {
         </div>
         <button type="button" class="btn-ghost" data-a="bikefit:close">Back to resources</button>
       </header>
+      ${renderSetupNotes(bikeFit.setupNotes)}
       <div class="panel bf-panel bf-sticky" id="bf-diagram-panel">
         <div id="bf-diagram">${renderDiagramPanel(form.bikeType, focus)}</div>
       </div>
