@@ -91,7 +91,7 @@ def test_analyze_with_prescription_reports_18_reps_from_laps(series, laps, struc
     assert result.reps_completed == 18
     assert len(result.efforts) == 18
     for e in result.efforts:
-        assert 300 <= e.avg_w <= 315
+        assert 300 <= e.avg_w <= 317  # steady average: ERG ramp seconds trimmed (indoor ride)
         assert e.duration_s == pytest.approx(40, abs=1)
         assert e.in_target_band is True
     assert result.reps_in_band_pct == 100.0

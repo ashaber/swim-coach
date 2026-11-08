@@ -91,6 +91,7 @@ from swim_coach.rep_shape import (
     STREAM_MIN_COVERAGE,
 )
 from swim_coach.power_curve import WARMUP_BUILD_VERDICT
+from swim_coach.rep_rating import RepClass, classify_rep, summarize_ratings
 from swim_coach.zones import bike_zone_table
 from swim_coach.prescription import (
     Located,
@@ -254,6 +255,18 @@ INDOOR_ROUGHNESS_MAX = 0.02
 # band regardless of the adaptive calc. A caller that knows the FIT
 # `sub_sport`/`trainer` flag can override via `analyze(..., indoor=...)`.
 # library/26-activity-stream-interval-analysis.md.
+
+ERG_RAMP_TRIM_S = 5.0
+# Coach judgment, from the 2026-11-07 indoor ride (Hammer H3, ERG, MyWhoosh, 3 x 8 x 40 s / 20 s):
+# the trainer takes ~5 s to ramp to a step's target after the step starts (and ~4 s to come down,
+# a tail that lands at the start of the NEXT step), so a whole-lap average read 293-301 W against
+# a steady 313-316 W and a 40 s rep was scored 0 of 24 in band. The first `ERG_RAMP_TRIM_S`
+# seconds of an indoor prescribed rep are dropped before it is scored; the whole-rep average is
+# still reported as `raw_avg_w`. library/26-activity-stream-interval-analysis.md ("ERG ramp trim").
+
+ERG_RAMP_MIN_REP_FACTOR = 2.0
+# Coach judgment: only trim a rep at least this many times the trim long, so a meaningful
+# steady window (>= the trim itself) is left to score. library/26-activity-stream-interval-analysis.md.
 
 FADE_FLAG_PCT = 10.0
 # [ADAPTED: cycling] Confidence: medium. First-third-vs-last-third mean
@@ -820,6 +833,23 @@ def _adaptive_in_band_frac(series: dict, *, indoor: bool | None = None) -> float
         return IN_BAND_FRAC
     band = roughness * IN_BAND_ROUGHNESS_MULT
     return max(IN_BAND_FRAC, min(IN_BAND_FRAC_MAX, band))
+
+
+def is_indoor(series: dict, indoor: bool | None) -> bool:
+    """Whether the trainer, not the rider, held the watts: the caller's `indoor` flag when given,
+    else inferred from the ride's own smooth power (`INDOOR_ROUGHNESS_MAX`)."""
+    if indoor is not None:
+        return indoor
+    roughness = _power_roughness(series)
+    return roughness is not None and roughness < INDOOR_ROUGHNESS_MAX
+
+
+def ramp_trim_s(rep_duration_s: float, *, indoor: bool) -> float:
+    """Seconds to drop from the start of an indoor prescribed rep before scoring it (0 outdoors
+    or when the rep is shorter than `ERG_RAMP_MIN_REP_FACTOR` x the trim)."""
+    if indoor and rep_duration_s >= ERG_RAMP_MIN_REP_FACTOR * ERG_RAMP_TRIM_S:
+        return ERG_RAMP_TRIM_S
+    return 0.0
 
 
 # --- elevation-aware compliance: altitude context -------------------------------------
@@ -1564,6 +1594,13 @@ def _build_interval_effort(
     )
 
 
+def _class_count(efforts: list[IntervalEffort], rep_class: str) -> int | None:
+    """Reps of a graded class among a round's completed reps; `None` when none were rated."""
+    if not any(e.rep_class is not None for e in efforts):
+        return None
+    return sum(e.rep_class == rep_class for e in efforts)
+
+
 def _pct_drop(first: float | None, last: float | None) -> float | None:
     if first is None or last is None or first <= 0:
         return None
@@ -2061,6 +2098,7 @@ def _analyze_prescribed_reps(
     lthr_bpm: float | None = None,
     session_text: str | None = None,
     laps: list | None = None,
+    indoor: bool = False,
 ) -> dict | None:
     """Per-rep / per-round read of reps located from the prescription (see
     `prescription.py`) or inferred from the device laps (`rep_shape.infer_lap_shape`).
@@ -2080,15 +2118,33 @@ def _analyze_prescribed_reps(
             n=len(efforts) + 1, start_idx=idx[0], end_idx=idx[1],
             start_s=t_s[idx[0]], end_s=t_s[idx[1]] + 1.0, kind="prescribed",
         )
+        trim = ramp_trim_s(rep.duration_s, indoor=indoor) if rep.low_w is not None else 0.0
+        steady_idx = window_indices(t_s, win.start_s + trim, win.end_s) if trim else None
+        if steady_idx is None:
+            trim = 0.0
         mid = None
         if rep.low_w is not None and rep.high_w is not None:
             mid = (rep.low_w + rep.high_w) / 2
         elif rep.low_w is not None:
             mid = rep.low_w
+        scored_effort = detected
+        if trim:
+            scored_effort = DetectedEffort(
+                n=detected.n, start_idx=steady_idx[0], end_idx=steady_idx[1],
+                start_s=t_s[steady_idx[0]], end_s=t_s[steady_idx[1]] + 1.0, kind="prescribed",
+            )
         effort = _build_interval_effort(
-            series, detected, mid, in_band, baseline_altitude_m, baseline_altitude_source,
+            series, scored_effort, mid, in_band, baseline_altitude_m, baseline_altitude_source,
             with_sub_structure=False,
         )
+        if trim:
+            raw_avg = _mean((series.get("power_w") or [])[idx[0] : idx[1] + 1])
+            effort = effort.model_copy(update={
+                "start_s": round(detected.start_s, 1),
+                "duration_s": round(detected.duration_s, 1),
+                "raw_avg_w": round(raw_avg, 1) if raw_avg is not None else None,
+                "ramp_trim_s": trim,
+            })
         in_target = None
         if rep.low_w is not None and effort.avg_w is not None:
             in_target = effort.avg_w >= rep.low_w and (
@@ -2168,7 +2224,18 @@ def _analyze_prescribed_reps(
         low = rep_of[e.n].low_w
         return e.avg_w is not None and (low is None or e.avg_w >= REP_COMPLETED_MIN_FRAC_OF_LOW * low)
 
-    done = [e for e in efforts if completed(e)]
+    done_ns = {e.n for e in efforts if completed(e)}
+    rated: list[tuple[int | None, RepClass, float, str]] = []
+    for i, e in enumerate(efforts):
+        r = rep_of[e.n]
+        if e.n not in done_ns or e.n in technical_ns or e.avg_w is None or e.in_target_band is None:
+            continue
+        graded = classify_rep(e.avg_w, low_w=r.low_w, high_w=r.high_w, zone=r.zone, ftp_watts=ftp_watts)
+        if graded is None:
+            continue
+        efforts[i] = e.model_copy(update={"rep_class": graded[0], "landed_zone": graded[1]})
+        rated.append((e.round_n, graded[0], e.avg_w, graded[1]))
+    done = [e for e in efforts if e.n in done_ns]
     banded = [e for e in done if e.in_target_band is not None]
     reps_in_band_pct = (
         round(sum(bool(e.in_target_band) for e in banded) / len(banded) * 100, 1) if banded else None
@@ -2205,6 +2272,9 @@ def _analyze_prescribed_reps(
                 avg_w=round(statistics.fmean(pw), 1) if pw else None,
                 avg_hr=round(statistics.fmean(hrs)) if hrs else None,
                 reps_in_band=sum(bool(e.in_target_band) for e in rbanded) if rbanded else None,
+                reps_below_band_in_zone=_class_count(in_round, "below_band_in_zone"),
+                reps_dropped_zone=_class_count(in_round, "dropped_zone"),
+                reps_above_band=_class_count(in_round, "above_band"),
                 fade_within_pct=(
                     _pct_drop(statistics.fmean(pw[:half]), statistics.fmean(pw[-half:]))
                     if half >= 1 and len(pw) >= 2 and not any(e.n in technical_ns for e in in_round)
@@ -2221,6 +2291,13 @@ def _analyze_prescribed_reps(
     zones = {r.zone for r in all_reps}
     bands = {(r.low_w, r.high_w) for r in all_reps}
     band = next(iter(bands)) if len(bands) == 1 else None
+    rep_ratings = summarize_ratings(
+        rated,
+        low_w=band[0] if band else None,
+        high_w=band[1] if band else None,
+        zone=next(iter(zones)) if len(zones) == 1 else None,
+        ftp_watts=ftp_watts,
+    )
     return {
         "efforts_detected": len(efforts),
         "matched_to_prescription": True,
@@ -2229,6 +2306,7 @@ def _analyze_prescribed_reps(
         "detection_source": located.source,
         "reps_completed": len(done),
         "reps_in_band_pct": reps_in_band_pct,
+        "rep_ratings": rep_ratings,
         "fade_across_reps_pct": fade_reps,
         "fade_across_rounds_pct": fade_rounds,
         "target_zone": next(iter(zones)) if len(zones) == 1 else None,
@@ -2369,6 +2447,7 @@ def analyze(
             lthr_bpm=lthr_bpm,
             session_text=session_text,
             laps=laps,
+            indoor=is_indoor(series, indoor),
         )
         if prescription is not None and located.source == "lap_shape":
             prescription["matched_to_prescription"] = False
