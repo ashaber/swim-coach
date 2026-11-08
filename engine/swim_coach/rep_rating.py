@@ -109,11 +109,11 @@ def summarize_ratings(
     parts = [f"{held} of {n} reps held{where}"]
     below = [r for r in rows if r[1] == "below_band_in_zone"]
     if below and low_w:
-        pcts = [(low_w - r[2]) / low_w * 100 for r in below]
-        lo_p, hi_p = round(min(pcts)), round(max(pcts))
-        span = f"{lo_p}%" if lo_p == hi_p else f"{lo_p}-{hi_p}%"
+        gaps = [low_w - r[2] for r in below]
+        lo_g, hi_g = max(1, round(min(gaps))), max(1, round(max(gaps)))
+        span = f"{lo_g}" if lo_g == hi_g else f"{lo_g}-{hi_g}"
         who = "all" if len(below) == n else f"{len(below)}"
-        parts.append(f"{who} {span} under the {band}" if band else f"{who} {span} under the band")
+        parts.append(f"{who} {span} W under the {band} band" if band else f"{who} {span} W under the band")
     if count["dropped_zone"]:
         dropped = [r for r in rows if r[1] == "dropped_zone"]
         landed = sorted({r[3] for r in dropped}, key=_zone_rank)

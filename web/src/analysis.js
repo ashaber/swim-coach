@@ -59,6 +59,11 @@ function summaryRows(iv) {
   if (iv.target_zone) rows.push(['Target zone', iv.target_zone]);
   if (Array.isArray(iv.target_band_w)) rows.push(['Target band', `${iv.target_band_w[0]}-${iv.target_band_w[1]} W`]);
   if (num(iv.reps_in_band_pct)) rows.push(['Reps in band', `${iv.reps_in_band_pct}%`]);
+  if (iv.rep_ratings && iv.rep_ratings.summary) rows.push(['Rep rating', iv.rep_ratings.summary]);
+  const trimmed = (iv.efforts || []).find((e) => num(e.ramp_trim_s));
+  if (trimmed) {
+    rows.push(['Steady-state scoring', `First ${trimmed.ramp_trim_s} s of each rep left out (trainer ramp); the table shows the steady average`]);
+  }
   if (num(iv.fade_across_reps_pct)) rows.push(['Fade across reps', signed(iv.fade_across_reps_pct)]);
   if (num(iv.fade_across_rounds_pct)) rows.push(['Fade across rounds', signed(iv.fade_across_rounds_pct)]);
   if (num(iv.decoupling_tightened_pct)) rows.push(['Decoupling (working time)', signed(iv.decoupling_tightened_pct)]);
@@ -71,23 +76,35 @@ function summaryRows(iv) {
 
 export const EFFORT_COLUMNS = ['#', 'Round', 'Start', 'Dur', 'Avg W', 'Target', 'In band', 'HR', 'Drift', 'Fade (+ = faded)', 'Verdict'];
 
+/** The "In band" cell: yes/no, with where a rep that missed the band landed (graded rating). */
+function inBandCell(e) {
+  if (e.in_target_band === true) return 'yes';
+  if (e.in_target_band !== false) return num(e.time_in_band_pct) ? `${Math.round(e.time_in_band_pct)}%` : dash;
+  if (e.rep_class === 'below_band_in_zone') return 'no, in zone';
+  if (e.rep_class === 'dropped_zone') return `no, dropped to ${e.landed_zone || 'a lower zone'}`;
+  if (e.rep_class === 'above_band') return 'no, over band';
+  return 'no';
+}
+
+/** The "Avg W" cell: the scored (steady) average, with the whole-lap average when a ramp was trimmed. */
+function avgWCell(e) {
+  return num(e.ramp_trim_s) && num(e.raw_avg_w) ? `${watts(e.avg_w)} (lap ${Math.round(e.raw_avg_w)})` : watts(e.avg_w);
+}
+
 function effortRows(iv) {
   const band = Array.isArray(iv.target_band_w) ? `${Math.round(iv.target_band_w[0])}-${Math.round(iv.target_band_w[1])} W` : null;
   return (iv.efforts || []).map((e) => {
     let target = dash;
     if (band && e.in_target_band !== null && e.in_target_band !== undefined) target = band;
     else if (num(e.target_w)) target = watts(e.target_w);
-    let inBand = dash;
-    if (e.in_target_band === true) inBand = 'yes';
-    else if (e.in_target_band === false) inBand = 'no';
-    else if (num(e.time_in_band_pct)) inBand = `${Math.round(e.time_in_band_pct)}%`;
+    const inBand = inBandCell(e);
     const round = num(e.round_n) ? `${e.round_n}.${e.rep_in_round ?? ''}` : dash;
     return [
       String(e.n),
       round,
       formatClock(e.start_s) || dash,
       formatClock(e.duration_s) || dash,
-      watts(e.avg_w),
+      avgWCell(e),
       target,
       inBand,
       num(e.avg_hr) ? String(e.avg_hr) : dash,

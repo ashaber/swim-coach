@@ -134,7 +134,8 @@ def test_session_rating_summary_for_a_uniformly_under_band_ride():
     assert (r.rated, r.below_band_in_zone, r.in_band, r.dropped_zone, r.above_band) == (24, 24, 0, 0, 0)
     assert r.held_zone_pct == 100.0
     assert r.summary.startswith("24 of 24 reps held VO2 (Z5)")
-    assert "320-335 W" in r.summary
+    assert "W under the 320-335 W band" in r.summary
+    assert r.summary.startswith("24 of 24 reps held VO2 (Z5); all ")
     assert out.reps_in_band_pct == 0.0  # the in-band call is kept alongside
 
 
