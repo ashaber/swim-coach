@@ -26,6 +26,26 @@ COACH_START_DROP = (
 )
 
 
+def _slim_rep_ratings(iv: dict) -> None:
+    """Coach view only: the graded rating adds nothing when every rated rep was in band (the
+    in-band share says so); otherwise keep the counts that are non-zero and the summary line."""
+    r = iv.get("rep_ratings")
+    if r is None:
+        return
+    if r.get("in_band") == r.get("rated"):
+        iv.pop("rep_ratings")
+    else:
+        for k in ("prescribed_zone", "held_zone_pct"):  # the summary line carries these
+            r.pop(k, None)
+        for k in ("in_band", "below_band_in_zone", "dropped_zone", "above_band"):
+            if r.get(k) == 0:
+                r.pop(k)
+    for rd in iv.get("rounds") or []:
+        for k in ("reps_below_band_in_zone", "reps_dropped_zone", "reps_above_band"):
+            if rd.get(k) == 0:
+                rd.pop(k)
+
+
 def _slim_efforts_and_rounds(iv: dict) -> None:
     """Coach view only. Every start lives in the `starts` table, so its effort and its
     prescription round are dropped (as are warm-up builds, whose 5 s averages the coach
@@ -44,12 +64,17 @@ def _slim_efforts_and_rounds(iv: dict) -> None:
         e["n"] = i
         for k in ("altitude_context", "altitude_m", "altitude_gain_m", "altitude_decrement_pct"):
             e.pop(k, None)
+        for k in ("landed_zone", "ramp_trim_s"):  # the rep_ratings summary and raw_avg_w carry these
+            e.pop(k, None)
+        if e.get("rep_class") == "in_band":  # in_target_band already says so
+            e.pop("rep_class", None)
     iv["efforts"] = efforts
     rounds = [r for r in iv.get("rounds") or [] if r.get("n") not in drop_rounds]
     if any((r.get("reps_prescribed") or 0) > 1 for r in rounds):
         iv["rounds"] = rounds
     else:
         iv.pop("rounds", None)
+    _slim_rep_ratings(iv)
 
 
 def _shape_intervals(iv: dict) -> dict:

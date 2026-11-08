@@ -44,6 +44,11 @@ _SWIM_ADDED = {
 }
 
 
+# Graded-rating / ERG-trim fields added after the goldens were pinned (additive; see test_erg_ramp_and_zone_rating).
+_GRADED_EFFORT = {"raw_avg_w", "ramp_trim_s", "rep_class", "landed_zone"}
+_GRADED_ROUND = {"reps_below_band_in_zone", "reps_dropped_zone", "reps_above_band"}
+
+
 def _without_dynamics(analytics) -> dict:
     """The dump minus the MTB-dynamics, race-efficiency, race-view and canonical-lap blocks (added after the goldens were
     pinned) and the race lap table (now cut from the canonical laps, see test_canonical_laps); these
@@ -57,7 +62,10 @@ def _golden_shape(dump: dict) -> dict:
     goldens pinned the old device-timer value; it is now elapsed minus pauses (test_swim_sets)."""
     dump = {k: v for k, v in dump.items() if k != "moving_min"}
     if dump.get("intervals"):
-        dump = {**dump, "intervals": {k: v for k, v in dump["intervals"].items() if k != "race_laps"}}
+        iv = {k: v for k, v in dump["intervals"].items() if k not in ("race_laps", "rep_ratings")}
+        iv["efforts"] = [{k: v for k, v in e.items() if k not in _GRADED_EFFORT} for e in iv.get("efforts") or []]
+        iv["rounds"] = [{k: v for k, v in r.items() if k not in _GRADED_ROUND} for r in iv.get("rounds") or []]
+        dump = {**dump, "intervals": iv}
     return dump
 
 

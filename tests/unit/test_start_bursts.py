@@ -149,7 +149,8 @@ def test_slim_coach_view_has_no_warmup_builds_starts_rounds_nulls_or_swim_fields
     iv = view["intervals"]
     assert [e["n"] for e in iv["efforts"]] == list(range(1, len(iv["efforts"]) + 1))
     assert all(e["duration_s"] > 60 for e in iv["efforts"])  # starts live only in `starts`
-    assert "rounds" not in iv  # every round was a single rep, repeating its effort
+    # the starts' rounds are dropped; the 5 x 5 block is one round of 5 reps (a flat repeat is one round)
+    assert [(r["n"], r["reps_prescribed"]) for r in iv["rounds"]] == [(3, 5)]
     assert len(iv["starts"]) == 5 and all(len(s["trace_w"]) >= 30 for s in iv["starts"])
     assert "trace_cadence" not in iv["starts"][0]
     four = iv["starts"][3]
