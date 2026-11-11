@@ -1517,3 +1517,68 @@ Then connect BigQuery in claude.ai, point Claude Dashboards at `coach_logs`, and
 - Claude Dashboards is beta: expect changes.
 
 **Related:** IDEA 022 (cost audit), IDEA 025 (routing), `scripts/route_report.py`, and the shadow report script from the router PR.
+
+## IDEA 027 - Multi-agent red team, progress auditor, and evals (2026-11-10)
+
+**Goal:** real separate-context agents, not personas in the coach's context, plus an eval harness that answers two questions: *did the agent do it right?* and *has it drifted?* Part of the point is resume depth, so building more than strictly needed is acceptable.
+
+### What already exists
+- **Rule-based red team:** `plan_check.check_macro` / `check_week` return `PlanCheckFinding` (id, severity, evidence, consequence, fix, authoring/judgment). Macro findings are saved on `MacroPlan.red_team` as `MacroRedTeamRecord`, with fix/keep_as_is decisions (`athlete_words` required for high severity). The shape was copied from Tim's `red-team.md` (IDEA 009b), so agent findings fit the same review flow with no new UX.
+- **One-shot model call:** `ClaudeChat.run_once` (`backend/app/claude.py`), a non-streaming tool loop that returns one answer.
+- **Tool groups:** `save_claims.WRITE_TOOLS` / `DRAFT_ONLY_TOOLS` / `SIDE_EFFECT_TOOLS`. A read-only red-team tool list = everything else.
+- **Side-by-side pattern:** `router_shadow.py` runs a second model next to Sonnet on a background thread. The athlete never sees it, failures are caught, it logs one structured line, and `router_shadow_captures` stores paired outputs for a human to compare.
+- **Insertion point:** plans are drafted then confirmed (`drafts.py`, `author_macro_plan` / `author_week_plan`). The red team runs between the two.
+- **Progress data (use case 2):** `ctl_target` per macro week, `_project_ctl_atl_tsb`, `_check_goal_reality`, `execution_score`, `cardiac_drift`, `swolf_trend`, `adapt_week` long-swim progression.
+- **Early eval pieces:** `save_claims` is already a deterministic grader. Tool traces are stored per conversation message. Cost and token logs feed BigQuery (IDEA 026). `DEFECTS.md` and dated incidents are a ready list of known failures.
+
+### Use case 1 - plan red team (separate agent)
+- **Separate context:** the red team never sees the coach's conversation or reasoning, which would pull it toward agreeing. Input is the draft plan, athlete profile and goals, recent actual load, the engine's findings, and relevant library cards (~10-20k tokens, not the ~166k coach context).
+- **Instructions:** Tim's discipline: at most 6 objections, explicitly no padding. It is told what the engine already found and looks for what rules can't catch: fit to the goal, specificity gaps, life and logistics, sessions that interfere (e.g. strength the day before a key swim).
+- **Output:** a forced JSON schema reusing `PlanCheckFinding`, plus `source: engine|agent` and an overall verdict.
+- **Trigger:** runs automatically when a macro plan or significant week revision is drafted. Not a tool the coach chooses to call, because the agent shouldn't decide when its own work gets reviewed.
+- **Rollout:** shadow mode first (log and capture, show the coach nothing). Then feed findings into the existing fix/keep_as_is flow.
+- **Model:** a different model from the coach may give more varied objections. Evals decide whether it is worth the cost.
+- **Optional:** `.claude/agents/red-team.md` sharing the same prompt file, for CLI agent sessions.
+
+### Use case 2 - progress auditor
+- **Engine (new, deterministic):** `progress_report()` compares plan with reality: actual vs. target CTL, long-swim progression planned vs. done, key-session completion, execution-score trend, threshold/CSS trend vs. what goal pace needs.
+- **Agent:** classifies each gap as *plan wrong* (targets unrealistic), *athlete off track* (missed sessions, fatigue), *missing data* (unsynced files), or *normal noise*, and says what to change. This judgment is what makes it more than a dashboard.
+- **Trigger:** open question: a step inside `/adapt`, or its own weekly schedule.
+
+### Evals
+| Question | Type | How |
+|---|---|---|
+| Did the agent do it right? | Offline eval | Curated cases + graders; run before any prompt or model change |
+| Has it drifted? | Regression + online monitoring | Re-run the offline set on every model/prompt change; track production signals over time |
+
+- **Graders, best first:** deterministic code checks, a model judging against a written rubric, human labels.
+- **Seeded-flaw set for the red team:** real plans with planted flaws (taper too short, long swim +20%, no recovery week, untapered race, strength before a key swim), plus clean plans. Measure **recall** (caught the flaw), **precision** (didn't pad clean plans), and **stability** (same findings across N runs). Flaws the engine also catches give a free answer key.
+- **Incident regression cases:** 2026-09-27 taper "decline" misread; 2026-10-10 false save claim.
+- **The red team grades the coach:** its findings on real plans are a production signal; the seeded-flaw evals say whether the red team itself is trustworthy.
+- **Drift signals, no labels needed:** `save_claims` hit rate, engine findings per authored plan, keep_as_is override rate, red-team high-severity rate, Haiku/Sonnet router agreement. Chart them on the IDEA 026 dashboard.
+- **Infrastructure:** case format (YAML in a new `evals/`), live-API runner with a cost cap via `workflow_dispatch` (never in the unit suite: no-LLM rule), grader modules, results saved per run tagged with model + prompt version, and a diff report between runs.
+
+### Suggested order
+1. Eval harness + seeded-flaw set, scored against the existing engine checks (no LLM yet: proves the harness, gives a baseline).
+2. Red-team agent in shadow mode, scored by the harness.
+3. `progress_report()` in the engine, then the auditor agent.
+4. Drift metrics on the dashboard.
+
+### Engine revamp (added 2026-11-10)
+Andrew: the deterministic engine's plan output "really isn't good enough to use currently": it is always overridden, and the AI coach writes better plans and workouts. This continues the direction already set (the coach authors plans; the engine supplies data, projections and advisory checks).
+- Audit every engine piece and tag it **keep** (zones, load, CTL/ATL/TSB projection, parsers, analyzers), **fix** (checks that fire falsely), or **retire** (generators and templates the coach always overrides). Use real evidence: keep_as_is override rates per finding id, and engine output vs. what the coach actually authored.
+- Checks that are overridden most often are noise and erode trust in the red team. Retune or delete them.
+
+### Fable 5.2 window (limited time, billed against limits rather than tokens)
+Spend Fable on work whose **output lasts** (evals, labels, designs, audits). Hand the code to Sonnet afterwards. Don't run it unattended (2026-08-27: a Fable run failed mid-task when credits ran out).
+1. **Progress auditor:** design the gap classification and write the agent's instructions.
+2. **Engine revamp audit:** keep/fix/retire across `engine/swim_coach/`, based on real override data.
+3. **Writing the eval set:** seeded flaws, rubrics, expected findings. Highest leverage: it outlives the window and grades every cheaper model afterwards.
+4. **Reference red team:** Fable red-teams current real plans (Renee's 33.3 km, Andrew's 2027 ultra MTB). Immediately useful, and its findings become reference answers to measure the Sonnet red team against. This also answers whether the red team needs a top model or whether Sonnet is enough.
+5. **Coach context audit:** decide what in the ~166k prefix is dead weight (judgment over a large document; ties to cost, IDEA 022/025).
+6. **2027 season macro (24h / ultra MTB):** one high-stakes plan. A Fable vs. Sonnet coach comparison is itself an eval case.
+7. **Research verification** (the existing policy): taper/CTL rebuild research, library files awaiting human review.
+
+**Resume angle:** separate-context agents, structured output contracts, deterministic + model-based review in layers, seeded-flaw evals with precision/recall, regression testing across model upgrades, and model-tiering decisions backed by eval scores.
+
+**Related:** IDEA 009 (Tim's red team), 022/025/026 (cost, routing, dashboard), 012 (autoregulation).
