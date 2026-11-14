@@ -212,6 +212,7 @@ from swim_coach.course_features import MAX_SPLIT_PARTS, MIN_SPLIT_PARTS
 from swim_coach.section_detail import build_section_detail
 from swim_coach.athlete_time import athlete_today
 from swim_coach.event_groups import disband_group, effective_target, groups, set_group
+from swim_coach.formatting import duration_min_for_distance
 from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.gps_laps import GpsLapMetrics, analyze_laps
 from swim_coach.load import (
@@ -282,7 +283,6 @@ from swim_coach.plan import (
     _template_week_sessions,
     bike_session_as,
     template_normalization_notes,
-    _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
     _session_is_hard_bike,
@@ -7184,7 +7184,7 @@ def _apply_session_overrides(
 
     Takes the full `athlete` (not just `css_pace_s`) because the `ow_template`
     field below needs `workout_templates.resolve_template`'s full athlete
-    argument, not just the CSS pace `_duration_min_for_distance` re-estimation
+    argument, not just the CSS pace `duration_min_for_distance` re-estimation
     already used.
     """
     css_pace_s = athlete.css_pace_s_per_100m
@@ -7432,11 +7432,11 @@ def _apply_session_overrides(
         elif distance_m is not None and css_pace_s is not None and session.sport in ("swim_pool", "swim_ow"):
             # No explicit duration override -- re-estimate from the new
             # distance at the athlete's own CSS pace, same rough-estimate
-            # math the engine itself uses (_duration_min_for_distance),
+            # math the engine itself uses (duration_min_for_distance),
             # rather than leaving a stale duration paired with a new distance.
             # If the athlete has no CSS pace on file yet, leave duration_min
             # as generate_week originally computed it rather than guessing.
-            session.duration_min = max(_duration_min_for_distance(distance_m, css_pace_s), 15.0)
+            session.duration_min = max(duration_min_for_distance(distance_m, css_pace_s), 15.0)
 
         if interval_type is not None:
             wanted = "endurance" if str(interval_type).strip().lower() in ("endurance", "easy", "z2", "zone 2", "recovery ride") else normalize_interval_type(interval_type)
@@ -7544,7 +7544,7 @@ def _apply_session_overrides(
             session.structure = render_prose(resolved)
             session.distance_m = int(template_distance)
             if duration_min is None:
-                session.duration_min = max(_duration_min_for_distance(template_distance, css_pace_s), 15.0)
+                session.duration_min = max(duration_min_for_distance(template_distance, css_pace_s), 15.0)
     return None, notes
 
 

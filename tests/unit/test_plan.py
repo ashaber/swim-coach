@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from swim_coach.formatting import duration_min_for_distance, format_pace_s, round_100
 from swim_coach.models import Athlete, Event, RaceWeekChecklistItem, WorkoutRepeat, WorkoutStep
 from swim_coach.plan import (
     BIKE_DELOAD_CADENCE_WEEKS,
@@ -47,13 +48,10 @@ from swim_coach.plan import (
     _additional_swim_structure_template,
     _bike_ramp_week_index,
     _bike_week_sessions,
-    _duration_min_for_distance,
-    _format_pace_s,
     _monday_of_week,
     _monday_on_or_after,
     _no_coach_pool_purpose,
     _race_week_checklist,
-    _round_100,
     _select_bike_interval_template,
     _strength_session_structure,
     _strength_session_structure_template,
@@ -1610,13 +1608,13 @@ def test_generate_week_no_pool_coach_produces_real_structure(short_macro):
 
     expected_per_day = max(
         NO_COACH_POOL_SESSION_FLOOR_M,
-        _round_100(
+        round_100(
             max(0.0, week.target_volume_m - week.target_volume_m * LONG_SWIM_SHARE)
             / len(athlete.pool_schedule)
         ),
     )
     pace_s = _z2_pace_s_per_100m(athlete)
-    expected_duration = max(_duration_min_for_distance(expected_per_day, pace_s), 15.0)
+    expected_duration = max(duration_min_for_distance(expected_per_day, pace_s), 15.0)
 
     pool_sessions = [s for s in week.sessions if s.sport == "swim_pool"]
     assert len(pool_sessions) == 3
@@ -2033,7 +2031,7 @@ def test_additional_swim_structure_base_block_broken_distance_lite_template():
     distance_m, css_pace_s = 2000, 95.0
     text = _additional_swim_structure("base", distance_m, css_pace_s, selector=1)
     z2 = zone_table(css_pace_s)["Z2"]
-    z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
+    z2_range = f"{format_pace_s(z2['pace_lo_s'])}-{format_pace_s(z2['pace_hi_s'])}/100m"
     lines = text.splitlines()
     assert lines[0] == f"Warm-up: 400m easy, building to Z2 pace ({z2_range}) by the end."
     assert lines[1] == (
@@ -2055,8 +2053,8 @@ def test_additional_swim_structure_build_block_pyramid_template():
     text = _additional_swim_structure("build", distance_m, css_pace_s, selector=1)
     z3 = zone_table(css_pace_s)["Z3"]
     z4 = zone_table(css_pace_s)["Z4"]
-    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
-    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    z3_range = f"{format_pace_s(z3['pace_lo_s'])}-{format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{format_pace_s(z4['pace_lo_s'])}-{format_pace_s(z4['pace_hi_s'])}/100m"
     lines = text.splitlines()
     assert lines[1] == (
         f"Main set: 7 x 200m broken-distance pyramid, effort ramps from Z3 ({z3_range}) "
@@ -2077,8 +2075,8 @@ def test_additional_swim_structure_build_block_ladder_template():
     text = _additional_swim_structure("build", distance_m, css_pace_s, selector=2)
     z3 = zone_table(css_pace_s)["Z3"]
     z4 = zone_table(css_pace_s)["Z4"]
-    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
-    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    z3_range = f"{format_pace_s(z3['pace_lo_s'])}-{format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{format_pace_s(z4['pace_lo_s'])}-{format_pace_s(z4['pace_hi_s'])}/100m"
     lines = text.splitlines()
     assert lines[1] == (
         "Main set: 3 x (100m + 300m) climbing pairs, plus 1 x 200m capstone rep to "
@@ -2093,8 +2091,8 @@ def test_additional_swim_structure_build_block_straight_negative_split_template(
     text = _additional_swim_structure("build", distance_m, css_pace_s, selector=3)
     z3 = zone_table(css_pace_s)["Z3"]
     z4 = zone_table(css_pace_s)["Z4"]
-    z3_range = f"{_format_pace_s(z3['pace_lo_s'])}-{_format_pace_s(z3['pace_hi_s'])}/100m"
-    z4_range = f"{_format_pace_s(z4['pace_lo_s'])}-{_format_pace_s(z4['pace_hi_s'])}/100m"
+    z3_range = f"{format_pace_s(z3['pace_lo_s'])}-{format_pace_s(z3['pace_hi_s'])}/100m"
+    z4_range = f"{format_pace_s(z4['pace_lo_s'])}-{format_pace_s(z4['pace_hi_s'])}/100m"
     lines = text.splitlines()
     assert lines[1] == (
         f"Main set: 7 x 200m @ Z3 ({z3_range}), each rep negative-split building to "

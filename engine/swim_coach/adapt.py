@@ -51,6 +51,7 @@ from datetime import date, timedelta
 from typing import Literal
 from uuid import uuid4
 
+from swim_coach.formatting import duration_min_for_distance, round_100
 from swim_coach.load import (
     acute_chronic_ratio,
     compute_compliance,
@@ -68,8 +69,6 @@ from swim_coach.plan import (
     _find_block,
     _template_week_sessions,
     _training_day_offsets,
-    _duration_min_for_distance,
-    _round_100,
     _z2_pace_s_per_100m,
     generate_week,
 )
@@ -276,8 +275,8 @@ def _advance_stage_weekend_swims_m(
         if longest_recent_swim_m > 0
         else current_saturday_m
     )
-    total_weekend = _round_100(next_target_volume_m * LONG_SWIM_SHARE)
-    saturday_uncapped = _round_100(total_weekend * STAGE_SATURDAY_SHARE)
+    total_weekend = round_100(next_target_volume_m * LONG_SWIM_SHARE)
+    saturday_uncapped = round_100(total_weekend * STAGE_SATURDAY_SHARE)
     saturday = max(current_saturday_m, min(saturday_uncapped, step_cap, peak_cap, total_weekend))
     sunday = max(0, total_weekend - saturday)
     return saturday, sunday
@@ -512,7 +511,7 @@ def adapt_week(
                 weekend_total = saturday_m + sunday_m
                 if weekend_total > next_target_volume_m and weekend_total > 0:
                     scale = next_target_volume_m / weekend_total
-                    saturday_m = _round_100(saturday_m * scale)
+                    saturday_m = round_100(saturday_m * scale)
                     sunday_m = max(0, next_target_volume_m - saturday_m)
     else:
         if action == "advance" and can_advance_ladder:
@@ -579,7 +578,7 @@ def adapt_week(
                     session.model_copy(
                         update={
                             "distance_m": saturday_m,
-                            "duration_min": max(_duration_min_for_distance(saturday_m, pace_s), 15.0),
+                            "duration_min": max(duration_min_for_distance(saturday_m, pace_s), 15.0),
                         }
                     )
                 )
@@ -588,7 +587,7 @@ def adapt_week(
                     session.model_copy(
                         update={
                             "distance_m": sunday_m,
-                            "duration_min": max(_duration_min_for_distance(sunday_m, pace_s), 15.0),
+                            "duration_min": max(duration_min_for_distance(sunday_m, pace_s), 15.0),
                         }
                     )
                 )
