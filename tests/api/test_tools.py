@@ -15,7 +15,7 @@ import uuid
 
 import httpx
 import pytest
-from fakes import SpyFeedbackStore, make_workout
+from fakes import SpyFeedbackStore, make_workout, seed_generated_week
 from swim_coach.models import (
     Event,
     HealthStatus,
@@ -38,7 +38,6 @@ from app.tools import (
     GET_WORKOUTS_CAP,
     SYNC_WORKOUTS_WINDOW_DAYS,
     TOOLS_SCHEMA,
-    _generate_candidate_week_for_merge,
     _week_sessions_json,
     build_tool_handlers,
     format_macro_plan_table,
@@ -2252,24 +2251,9 @@ def _bike_macro_via_tools(handlers, store, run_tag, event_name_suffix="Century")
 
 
 def _seed_generated_week(athletes_dir, iso_week: str = "2026-W28") -> dict:
-    """Persists the engine-regenerated week for `iso_week` (the same generation path
-    `merge_week_plan` uses for its regenerate-proposal) as renee's week on file, and returns it
-    in the tool-facing `{"sessions": [...]}` shape -- the baseline the patch-override tests edit."""
-    store = FileStore(base_dir=athletes_dir)
-    athlete = store.load_athlete("renee")
-    year, wk = iso_week.split("-W")
-    week_start = date.fromisocalendar(int(year), int(wk), 1)
-    sessions, error = _generate_candidate_week_for_merge(store, "renee", iso_week, week_start, None, athlete)
-    assert error is None, error
-    existing = store.load_week("renee", iso_week)
-    if existing is not None:
-        week = existing.model_copy(update={"sessions": sessions})
-    else:
-        week = WeekPlan(
-            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=iso_week, meso_block="base",
-            focus="seeded", target_volume_m=0, sessions=sessions,
-        )
-    store.save_week("renee", week)
+    """Persists the engine-regenerated week for `iso_week` as renee's week on file and returns it in
+    the tool-facing `{"sessions": [...]}` shape -- the baseline the patch-override tests edit."""
+    week = seed_generated_week(FileStore(base_dir=athletes_dir), "renee", iso_week)
     return {"sessions": _week_sessions_json(week)}
 
 

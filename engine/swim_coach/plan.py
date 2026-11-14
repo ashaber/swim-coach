@@ -2213,8 +2213,8 @@ def _find_block(macro: MacroPlan, week_start: date) -> tuple[int, MacroBlock]:
     raise ValueError(
         f"{week_start} is outside this macro plan's date range "
         f"({macro.blocks[0].start_date.isoformat()} to {macro.blocks[-1].end_date.isoformat()}). "
-        "A macro only covers its own blocks: extend or replace it first (draft_season_macro_plan "
-        "for several close races, replace_macro_plan for one), or pick a week inside that range."
+        "A macro only covers its own blocks: extend or replace it first (author_macro_plan), "
+        "or pick a week inside that range."
     )
 
 
@@ -4972,7 +4972,7 @@ def generate_week(
                 "No macro block covers this week, so it was built from the athlete's weekly_template "
                 f"with bike volume HELD at ~{round(minutes)} min (last week's bike minutes, or the slot "
                 "defaults) and NO ramp-capped target. Confirm the volume with the athlete, and extend or "
-                "replace the macro (draft_season_macro_plan / replace_macro_plan) so later weeks are planned."
+                "replace the macro (author_macro_plan) so later weeks are planned."
             ],
             race_week_checklist=[],
         )

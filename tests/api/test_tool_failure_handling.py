@@ -111,7 +111,8 @@ def test_a_realism_check_that_crashes_does_not_fail_the_write(athletes_dir, monk
     h["set_weekly_template"]({"template": {"tue": [{"kind": "bike", "role": "hard"}]}, "confirm": True})  # runs the realism re-run
     monkeypatch.setattr(tools, "evaluate_week_realism", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("realism blew up")))
 
-    draft = h["replace_week_plan"]({"iso_week": "2026-W28"})
+    draft = h["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": [
+        {"date": "2026-07-07", "sport": "strength", "purpose": "KB day"}]})
     assert "error" not in draft and draft["sessions"]                      # the plan is still drafted
     assert any("realism check could not run" in w.lower() for w in draft["planning_warnings"])
     logged = next(e for e in _lines(capsys) if e.get("msg") == "optional step failed")
