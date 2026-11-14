@@ -3175,11 +3175,9 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     if not iso_week:
         return {"error": "iso_week is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         athlete = store.load_athlete(slug)
@@ -6853,11 +6851,9 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     if preference_error is not None:
         return {"error": preference_error}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     existing = store.load_week(slug, iso_week)
     if existing is not None:
@@ -6967,11 +6963,9 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     if not new_date_str:
         return {"error": "new_date is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         new_date = date.fromisoformat(new_date_str)
@@ -7695,6 +7689,15 @@ def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
     return dropped
 
 
+def _parse_iso_week_start(iso_week: str) -> tuple[date | None, dict[str, str] | None]:
+    """Monday of a `YYYY-Wnn` week as `(date, None)`, or `(None, error_dict)` if malformed."""
+    try:
+        year_str, week_str = iso_week.split("-W")
+        return date.fromisocalendar(int(year_str), int(week_str), 1), None
+    except (ValueError, IndexError):
+        return None, {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+
+
 def _iso_week_for_date(target_date: date) -> str:
     """`YYYY-Wnn` for the ISO week containing `target_date` -- for any tool
     that needs to find/place a session on a specific calendar date without
@@ -7960,11 +7963,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     if preference_error is not None:
         return {"error": preference_error}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     confirm = bool(input_data.get("confirm", False))
     if confirm:
@@ -8179,11 +8180,9 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     if not iso_week:
         return {"error": "iso_week is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    _, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     if bool(input_data.get("confirm", False)):
         agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="patch_week_plan")
@@ -8611,11 +8610,9 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         if agreed is not None:
             return agreed
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         current = store.load_week(slug, iso_week)
@@ -8848,11 +8845,9 @@ def _handle_propose_session_adjustment(
 
     confirm = bool(input_data.get("confirm", False))
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    _, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     week = store.load_week(slug, iso_week)
     if week is None:
@@ -10064,11 +10059,9 @@ def _handle_author_week_plan(
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     if bool(input_data.get("confirm", False)):
         agreed = _confirm_author_week_plan(
@@ -10353,11 +10346,9 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
 
     iso_week = input_data.get("iso_week")
     if iso_week:
-        try:
-            year_str, week_str = iso_week.split("-W")
-            week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-        except (ValueError, IndexError):
-            return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+        week_start, week_error = _parse_iso_week_start(iso_week)
+        if week_error is not None:
+            return week_error
         try:
             week = store.load_week(slug, iso_week)
         except Exception as exc:  # noqa: BLE001
