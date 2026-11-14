@@ -226,11 +226,12 @@ def test_inactive_and_out_of_range_events_are_skipped_and_noted():
 
 
 def test_projection_is_deterministic():
-    a = _project(_scenario("A", 5, 12.0))
-    b = _project(_scenario("A", 5, 12.0))
+    events = [_event(START + timedelta(weeks=8) - timedelta(days=1))]
+    a = _project(_scenario("A", 5, 12.0), events=events)
+    b = _project(_scenario("A", 5, 12.0), events=events)
     assert a.model_dump_json() == b.model_dump_json()
-    c1 = compare_scenarios([a, _project(_scenario("B", 4, 9.0))])
-    c2 = compare_scenarios([b, _project(_scenario("B", 4, 9.0))])
+    c1 = compare_scenarios([a, _project(_scenario("B", 4, 9.0), events=events)])
+    c2 = compare_scenarios([b, _project(_scenario("B", 4, 9.0), events=events)])
     assert c1.model_dump_json() == c2.model_dump_json()
 
 
@@ -340,7 +341,7 @@ def test_sequence_comparison_flags_back_to_back_hard_and_strength_before_long():
 
 def test_sequence_morning_tsb_uses_the_previous_days_load():
     week = _week([_session(0, "Z5", 60), _session(1, "Z5", 60)])
-    result = compare_week_sequences({"w": week}, _athlete(), current_ctl=50.0, current_atl=60.0)
+    result = compare_week_sequences({"w": week, "same": week}, _athlete(), current_ctl=50.0, current_atl=60.0)
     metrics = result.candidates["w"]
     assert metrics.hard_morning_tsb[START] == pytest.approx(-10.0)
     assert metrics.hard_morning_tsb[START + timedelta(days=1)] < -10.0
