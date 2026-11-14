@@ -247,3 +247,15 @@ def test_swim_without_css_has_no_executed_dose_unplanned():
 
 def test_ow_swim_shares_the_swim_profile():
     assert profile_for("swim_ow") is profile_for("swim_pool")
+
+
+def test_hard_session_thresholds_are_explicit_and_callers_keep_their_own():
+    from swim_coach.plan import _session_is_hard_bike
+    from swim_coach.plan_check import _is_hard_session
+    from swim_coach.stimulus import intensity_is_hard
+
+    z3, z4 = session(zone="Z3"), session(zone="Z4")
+    assert intensity_is_hard(z3, 3) and not intensity_is_hard(z3, 4) and intensity_is_hard(z4, 4)
+    # Known disagreement, kept as-is: plan.py counts Z3+ as hard, plan_check counts Z4+.
+    assert _session_is_hard_bike(z3) and not _is_hard_session(z3)
+    assert _session_is_hard_bike(z4) and _is_hard_session(z4)

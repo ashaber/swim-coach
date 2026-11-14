@@ -65,7 +65,7 @@ from swim_coach.models import (
 )
 from swim_coach.models import WorkoutRepeat, WorkoutStep, WorkoutStructure
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, evaluate_week_realism
-from swim_coach.zones import bike_zone_for_pct
+from swim_coach.stimulus import intensity_is_hard, walk_leaves, zone_rank
 from swim_coach.taper_search import RACE_DAY_TSB_BAND
 
 Verdict = Literal["sound", "sound-with-caveats", "fragile", "not-feasible"]
@@ -308,20 +308,19 @@ GOAL_REALITY_CHECK_HORIZON_YEARS = 5.0
 # as a session-count fraction rather than a raw day count, for a
 # session-count-based read on non-bike-primary weeks too).
 POLARIZED_MAX_HARD_SESSION_FRACTION = 1.0 / 3.0
-_HARD_ZONES = frozenset({"Z4", "Z5"})
+HARD_MIN_ZONE_RANK = 4  # Z4+ is hard here; `plan._BIKE_HARD_MIN_ZONE_RANK` is 3 for its bike-only guardrails
 
 
 def _is_hard_session(session: Session, race_dates: frozenset[date] = frozenset()) -> bool:
-    """A session counts as "hard" for the polarization check if it's
-    planned at Z4/Z5 -- the same zone-based hard/easy split
-    `plan.evaluate_week_realism`'s own hard-bike check already uses
-    (library/24, Seiler polarized distribution), generalized here to any
-    sport rather than bike-only."""
+    """A session counts as "hard" for the polarization check if it's planned at Z4/Z5, any sport
+    (library/24, Seiler polarized distribution). NOTE: `plan._session_is_hard_bike` uses a wider
+    Z3-Z5 threshold for its bike-only hard-day guardrails; the two intentionally keep their own
+    thresholds and share only `stimulus.intensity_is_hard`."""
     if session.kind in ("warmup", "opener"):
         return False  # priming, not a hard training session (library/38)
     if session.kind == "race" or (session.kind is None and session.sport == "bike" and session.date in race_dates):
         return False  # a race is an additive slot, not a polarization-counted training session
-    return session.intensity.get("zone") in _HARD_ZONES
+    return intensity_is_hard(session, HARD_MIN_ZONE_RANK)
 
 
 def _age_years(dob: date | None, as_of: date) -> float | None:
@@ -1497,46 +1496,12 @@ WARMUP_START_MAX_RANK = 1  # a normal-length session opens at Z1
 WARMUP_START_MAX_RANK_SHORT = 2  # a short one may open at Z2
 
 
-@dataclass(frozen=True)
-class _Leaf:
-    rank: int | None
-    duration_s: float
-    reps: int  # product of enclosing repeat counts
-
-
-def _zone_rank(step, ftp_watts: float | None) -> int | None:
-    target = step.target
-    if target is None:
-        return None
-    if target.zone:
-        return int(target.zone[1:])
-    if target.basis == "power_w" and ftp_watts:
-        bounds = [b for b in (target.low, target.high) if b is not None]
-        if bounds:
-            return int(bike_zone_for_pct(sum(bounds) / len(bounds) / ftp_watts * 100)[1:])
-    return None
-
-
-def _walk_leaves(structure: WorkoutStructure, ftp_watts: float | None) -> list[_Leaf]:
-    out: list[_Leaf] = []
-
-    def visit(items: list, reps: int) -> None:
-        for item in items:
-            if isinstance(item, WorkoutRepeat) or getattr(item, "kind", None) == "repeat":
-                visit(item.steps, reps * (item.count or 1))
-            elif item.duration_kind == "time_s" and item.duration_value:
-                out.append(_Leaf(_zone_rank(item, ftp_watts), float(item.duration_value), reps))
-
-    visit(structure.items, 1)
-    return out
-
-
 def _check_warmup_and_primer(session: Session, athlete: Athlete) -> list[PlanCheckFinding]:
     if session.sport != "bike" or session.structured is None:
         return []
     if session.kind in ("opener", "warmup"):
         return []  # an opener IS a primer; race warm-ups have `_check_race_warmup`
-    leaves = _walk_leaves(session.structured, athlete.ftp_watts)
+    leaves = walk_leaves(session.structured, ftp_watts=athlete.ftp_watts, time_only=True)
     hard = [
         i for i, leaf in enumerate(leaves)
         if leaf.rank is not None and leaf.rank >= WARMUP_HARD_ZONE_RANK
@@ -1625,7 +1590,7 @@ def _is_race_pace_effort(
     if step.target.basis == "power_w" and ftp_watts:
         bounds = [b for b in (step.target.low, step.target.high) if b is not None]
         return bool(bounds) and sum(bounds) / len(bounds) >= RACE_WARMUP_EFFORT_MIN_FRAC_FTP * ftp_watts
-    rank = _zone_rank(step, ftp_watts)
+    rank = zone_rank(step, ftp_watts=ftp_watts)
     return rank is not None and rank >= RACE_WARMUP_EFFORT_MIN_ZONE_RANK
 
 

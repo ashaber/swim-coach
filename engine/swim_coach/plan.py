@@ -51,6 +51,7 @@ from swim_coach.workout_templates import (
     render_prose,
     resolve_template,
 )
+from swim_coach.stimulus import intensity_is_hard
 from swim_coach.zones import bike_zone_table, zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
@@ -433,7 +434,7 @@ BIKE_OPENERS_ZONE = "Z4"
 # openers/primer session -- Z3->Z4->Z5 is a progressive ramp (see below),
 # and most of each ramp's time is spent in Z3/Z4, so "Z4" remains the
 # honest single-zone label for session-level classification
-# (`_session_is_hard_bike`'s `_BIKE_HARD_ZONES` already includes Z3-Z5, so
+# (`_session_is_hard_bike`'s `_BIKE_HARD_MIN_ZONE_RANK` already includes Z3-Z5, so
 # this choice doesn't change hard-day counting either way).
 
 BIKE_OPENERS_RAMP_Z3_S = 60.0
@@ -574,7 +575,7 @@ BIKE_WEEKLY_VOLUME_RAMP_CAP_FRACTION = 0.08
 # reuses the project's own uncited +8% rail verbatim rather than implying a
 # citation. Only checked when the caller supplies the prior week's volume.
 
-_BIKE_HARD_ZONES = {"Z3", "Z4", "Z5"}
+_BIKE_HARD_MIN_ZONE_RANK = 3  # Z3-Z5; plan_check's polarization count uses Z4+ (HARD_MIN_ZONE_RANK)
 # A generated bike session is "hard" for guardrail/strength-ordering
 # purposes when its top-level `Session.intensity["zone"]` sits here (every
 # easy endurance ride is "Z2"; every interval template's session zone is
@@ -3702,7 +3703,7 @@ def _session_is_hard_bike(s: Session) -> bool:
     return (
         s.sport == "bike"
         and not _session_is_race(s)
-        and str(s.intensity.get("zone") or "").upper() in _BIKE_HARD_ZONES
+        and intensity_is_hard(s, _BIKE_HARD_MIN_ZONE_RANK)
     )
 
 
