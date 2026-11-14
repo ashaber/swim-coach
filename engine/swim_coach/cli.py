@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 import yaml
 from pydantic import ValidationError
 
-from swim_coach.event_groups import effective_target
+from swim_coach.event_groups import effective_target, find_event
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import build_analysis_context
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
@@ -246,19 +246,6 @@ def _cmd_zones(args: argparse.Namespace, store: StoreInterface) -> int:
     return 0
 
 
-def _find_event(events: list[Event], query: str) -> Event | None:
-    """Match an event by UUID prefix (case-insensitive) or exact,
-    case-insensitive name."""
-    q = query.strip().lower()
-    for event in events:
-        if str(event.id).lower().startswith(q):
-            return event
-    for event in events:
-        if event.name.strip().lower() == q:
-            return event
-    return None
-
-
 def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     slug = args.athlete
     try:
@@ -271,7 +258,7 @@ def _cmd_scaffold_macro(args: argparse.Namespace, store: StoreInterface) -> int:
     except Exception as exc:  # noqa: BLE001
         return _error_from_exception(_error_label(store, slug, "events.yaml"), exc)
 
-    event = _find_event(events, args.event)
+    event = find_event(events, args.event)
     if event is None:
         return _error(f"no event matching {args.event!r}")
     event = effective_target(event, events)
@@ -1164,7 +1151,7 @@ def _cmd_onboard(args: argparse.Namespace, store: StoreInterface) -> int:
     own job is only: parse local YAML into the same `Athlete`/`Event`
     pydantic models the FileStore path already validates against, resolve
     the CLI-only conveniences (fuzzy `--event` matching via the same
-    `_find_event` `scaffold-macro` uses; `--test-400`/`--test-200` CSS-test
+    `find_event` `scaffold-macro` uses; `--test-400`/`--test-200` CSS-test
     parsing via the same `zones.css_from_test`/`parse_time_to_s` the `zones`
     subcommand uses), and format the JSON summary.
 
@@ -1230,7 +1217,7 @@ def _cmd_onboard(args: argparse.Namespace, store: StoreInterface) -> int:
 
     target_event: Event | None = None
     if args.event:
-        target_event = _find_event(events, args.event)
+        target_event = find_event(events, args.event)
         if target_event is None:
             return _error(f"no event matching {args.event!r} in {args.events!r}")
     elif len(events) == 1:

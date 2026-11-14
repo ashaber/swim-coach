@@ -211,7 +211,7 @@ from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
 from swim_coach.course_features import MAX_SPLIT_PARTS, MIN_SPLIT_PARTS
 from swim_coach.section_detail import build_section_detail
 from swim_coach.athlete_time import athlete_today
-from swim_coach.event_groups import disband_group, effective_target, groups, set_group
+from swim_coach.event_groups import disband_group, effective_target, find_event, groups, set_group
 from swim_coach.formatting import duration_min_for_distance
 from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.gps_laps import GpsLapMetrics, analyze_laps
@@ -8945,24 +8945,6 @@ def _handle_propose_session_adjustment(
     return response
 
 
-def _find_event_by_ref(events: list[Event], query: str) -> Event | None:
-    """Match an event by UUID prefix (case-insensitive) or exact,
-    case-insensitive name -- same convention as `swim_coach.cli`'s own
-    `_find_event` helper, reimplemented here rather than imported since
-    `tools.py` deliberately doesn't depend on the CLI module. Deliberately
-    does NOT filter on `Event.active`, same as every other event lookup in
-    this file (`draft_macro_plan`/`replace_macro_plan`/`propose_adaptation`)
-    -- an inactive event must still resolve."""
-    q = query.strip().lower()
-    for event in events:
-        if str(event.id).lower().startswith(q):
-            return event
-    for event in events:
-        if event.name.strip().lower() == q:
-            return event
-    return None
-
-
 def _taper_week_plans(
     store: StoreInterface, slug: str, sessions: list[Session], rationale: str
 ) -> list[WeekPlan]:
@@ -9146,7 +9128,7 @@ def _handle_propose_injury_adapted_taper(
         named_event = None
         if input_data.get("event"):
             try:
-                named_event = _find_event_by_ref(store.load_events(slug), input_data["event"])
+                named_event = find_event(store.load_events(slug), input_data["event"])
             except Exception:  # noqa: BLE001
                 log.warn("swallowed exception, using a default", where='backend/app/tools.py', line_hint=7580, exc_info=True)
                 named_event = None
@@ -9175,7 +9157,7 @@ def _handle_propose_injury_adapted_taper(
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
         return storage_error("events", exc)
-    event = _find_event_by_ref(events, event_ref)
+    event = find_event(events, event_ref)
     if event is None:
         known = [{"id": str(e.id), "name": e.name} for e in events]
         return {"error": f"no event matching {event_ref!r}; known events: {known}"}

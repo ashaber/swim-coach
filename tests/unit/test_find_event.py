@@ -10,7 +10,7 @@ from swim_coach.models import Event
 
 
 def _event(id_: str, name: str) -> Event:
-    return Event(id=UUID(id_), athlete_id=UUID(int=1), name=name, event_date=date(2027, 6, 1))
+    return Event(id=UUID(id_), athlete_id=UUID(int=1), name=name, event_date=date(2027, 6, 1), priority="A", distance_m=1000)
 
 
 A = _event("aaaaaaaa-0000-0000-0000-000000000001", "Lake Race")

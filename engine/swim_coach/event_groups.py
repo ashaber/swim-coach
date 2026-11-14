@@ -129,3 +129,17 @@ def set_group(
 def disband_group(events: list[Event], group_id: UUID) -> list[Event]:
     """`events` with every member of `group_id` ungrouped (the Events themselves are kept)."""
     return [e.model_copy(update=_UNGROUPED) if e.group_id == group_id else e for e in events]
+
+
+def find_event(events: list[Event], query: str) -> Event | None:
+    """Match an event by UUID prefix (case-insensitive) or exact, case-insensitive name.
+
+    Does not filter on `Event.active` -- an inactive event must still resolve."""
+    q = query.strip().lower()
+    for event in events:
+        if str(event.id).lower().startswith(q):
+            return event
+    for event in events:
+        if event.name.strip().lower() == q:
+            return event
+    return None
