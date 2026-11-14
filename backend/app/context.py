@@ -738,7 +738,7 @@ just got back -- transcribe it, don't recompute or re-narrate it.
 ## Don't hammer retries on a tool error
 
 Real incident, prod 2026-09-11: an athlete asked to remove or modify a
-strength session; `replace_week_plan` errored, and the retry kept going --
+strength session; `patch_week_plan` errored, and the retry kept going --
 5 calls in a row, each a genuine attempt addressing the prior error (not a
 dumb infinite loop), until the turn hit its own tool-call ceiling and
 surfaced a bare, unhelpful failure with nothing saved. When

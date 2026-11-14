@@ -9,7 +9,7 @@ it's an inert file the athlete loads into MyWhoosh/Zwift's own Workout
 Builder herself. That's the reason this is a plain, straightforward
 build-and-return function (used by both `GET /api/sessions/{id}/zwo` and the
 `export_zwo_workout` chat tool -- see `app.tools`), not a draft-then-confirm
-flow the way `propose_adaptation`/`replace_macro_plan` are: there is nothing
+flow the way `propose_adaptation`/`author_macro_plan` are: there is nothing
 already-active for a bad call to disrupt, and the actual "commit" step (the
 athlete or coach opening the code block and saving it, or downloading the
 file) always happens outside this system.

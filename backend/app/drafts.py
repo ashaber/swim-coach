@@ -28,10 +28,8 @@ TAPER_CARRIER_WEEK = "9999-W01"
 MACRO_CARRIER_WEEK = "9999-W02"
 
 # Which tool WRITES a draft made by each tool, for the rare case a draft's
-# own tool cannot confirm itself. Empty now (engine/plan-check-red-team PR
-# 2): `propose_adaptation` no longer holds a draft at all (it's advisory
-# only -- see its own handler docstring; its old draft used to be written
-# via `replace_week_plan`, now retired from TOOLS_SCHEMA), and every
+# own tool cannot confirm itself. Empty now: `propose_adaptation` no longer
+# holds a draft at all (it's advisory only -- see its own handler docstring), and every
 # draft-holding tool below (author_macro_plan, author_week_plan,
 # patch_week_plan, merge_week_plan, ...) confirms itself, which the
 # `_describe` fallback below already handles without an explicit entry here.
@@ -110,7 +108,7 @@ def pending_drafts(store: StoreInterface, slug: str) -> list[WeekPlan]:
 
 def _describe(draft: WeekPlan) -> tuple[str, str, str]:
     """`(what, tool_to_call, extra_args)` for one held draft."""
-    tool = WRITE_TOOL.get(draft.drafted_by or "", draft.drafted_by or "replace_week_plan")
+    tool = WRITE_TOOL.get(draft.drafted_by or "", draft.drafted_by or "author_week_plan")
     if draft.iso_week == MACRO_CARRIER_WEEK:
         macro = json.loads(draft.adaptation_rationale or "{}").get("macro") or {}
         blocks = ", ".join(b.get("name", "?") for b in macro.get("blocks", []))
