@@ -23,21 +23,23 @@ from datetime import date, timedelta
 import pytest
 
 from swim_coach.models import Athlete, Event, Session
-from swim_coach.plan import (
-    BIKE_MIDWEEK_QUALITY_REPS,
+from swim_coach.workout_builders.bike import (
     BIKE_OPENERS_MAX_REPS,
     BIKE_OPENERS_MIN_REPS,
-    BIKE_OPENERS_PROXIMITY_DAYS,
     BIKE_OPENERS_RAMP_Z3_S,
     BIKE_OPENERS_RAMP_Z4_S,
     BIKE_OPENERS_RAMP_Z5_S,
     BIKE_OPENERS_REST_S,
+    _bike_openers_main,
+)
+from swim_coach.plan import (
+    BIKE_MIDWEEK_QUALITY_REPS,
+    BIKE_OPENERS_PROXIMITY_DAYS,
     BIKE_OPENERS_ZONE,
     BIKE_PRERACE_PRIMER_REPS,
     STRENGTH_PRERACE_REDUCED_COUNT,
     STRENGTH_PRERACE_WINDOW_DAYS,
     STRENGTH_SESSIONS_PER_WEEK,
-    _bike_openers_main,
     _bike_prerace_primer_session,
     _bike_week_sessions,
     _select_bike_interval_template,

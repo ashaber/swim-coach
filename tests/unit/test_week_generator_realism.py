@@ -266,7 +266,7 @@ def test_strength_after_hard_day_with_training_pattern():
 def test_openers_template_is_registered():
     assert "openers" in BIKE_INTERVAL_TEMPLATES
     assert "openers" in BIKE_INTERVAL_TEMPLATE_META
-    from swim_coach.plan import _BIKE_INTERVAL_TEMPLATE_BUILDERS
+    from swim_coach.workout_builders.bike import _BIKE_INTERVAL_TEMPLATE_BUILDERS
 
     assert "openers" in _BIKE_INTERVAL_TEMPLATE_BUILDERS
 
