@@ -5992,20 +5992,14 @@ def _generate_week_tolerant(
     **kwargs: Any,
 ) -> WeekPlan:
     """`generate_week`, except a `template_preference` the library has no template for (an equipment
-    or style preference like kettlebells) DEGRADES to the default rotation with a warning instead of
+    or style preference like kettlebells) DEGRADES to the default rotation instead of
     failing the whole week -- an unmet preference must never stop the coach writing the plan."""
     try:
         return generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event, **kwargs)
     except ValueError as exc:
         if template_preference is None or "no workout templates match" not in str(exc):
             raise
-    week = generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
-    week.planning_warnings = list(week.planning_warnings) + [
-        "No library workout template matches the requested preference, so the default rotation was used. "
-        "Write the specific content the athlete asked for yourself (`purpose` / `structure`, as coach "
-        "judgment) and log the gap with flag_for_coach_review (research_gap: true) -- do not refuse."
-    ]
-    return week
+    return generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
 
 
 def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> float | None:
