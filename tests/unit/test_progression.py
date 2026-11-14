@@ -246,3 +246,90 @@ def test_ledger_swim_record_end_to_end():
     ledger = build_ledger([w], [], [], ATHLETE, as_of=AS_OF)
     assert len(ledger) == 1 and ledger[0].kind == "threshold" and ledger[0].executed.dose.work_m == 800
     assert read_progression(ledger, as_of=AS_OF)[0].unit == "m"
+
+
+# --- week stimulus review -------------------------------------------------------------------
+
+from swim_coach.progression import week_stimulus_review  # noqa: E402
+
+MON = date(2026, 11, 9)
+
+
+def swim_session(day, zone="Z4", **kw):
+    st = WorkoutStructure(items=[WorkoutRepeat(count=8, steps=[tstep("interval", "distance_m", 100, zone, "swim"),
+                                                                tstep("rest", "time_s", 15, "Z1", "swim")])])
+    return Session(id=uuid.uuid4(), athlete_id=AID, date=day, sport="swim_pool", source="ai_coach", duration_min=45,
+                   distance_m=1800, intensity={"zone": zone}, purpose="t", structured=st, **kw)
+
+
+def easy_bike_session(day):
+    return Session(id=uuid.uuid4(), athlete_id=AID, date=day, sport="bike", source="ai_coach", duration_min=60,
+                   intensity={"zone": "Z2"}, purpose="t")
+
+
+def review(sessions, workouts, as_of):
+    return week_stimulus_review(week(sessions), workouts, ATHLETE, [], as_of=as_of)
+
+
+def test_week_without_unplanned_work_has_no_impacts():
+    s_done, s_future = bike_session(MON), bike_session(MON + timedelta(days=4))
+    r = review([s_done, s_future], [bike_workout(MON)], MON + timedelta(days=2))
+    assert r.impacts == [] and r.unplanned_done == []
+    assert [e.session_id for e in r.planned_done] == [s_done.id]
+    assert [e.session_id for e in r.remaining] == [s_future.id]
+    assert r.week_start == MON
+
+
+def test_planned_and_missed_when_date_passed():
+    missed, future = bike_session(MON), bike_session(MON + timedelta(days=5))
+    r = review([missed, future], [], MON + timedelta(days=3))
+    assert [e.session_id for e in r.planned_missed] == [missed.id]
+    assert [e.session_id for e in r.remaining] == [future.id]
+
+
+def test_unplanned_work_is_classified_with_dose_and_load():
+    r = review([bike_session(MON + timedelta(days=5))], [bike_workout(MON + timedelta(days=1), rpe=7)], MON + timedelta(days=2))
+    u = r.unplanned_done[0]
+    assert u.kind == "threshold" and u.executed.dose.work_s == 1800 and u.load_au > 0 and not u.executed.planned
+
+
+def test_duplicate_stimulus_impact():
+    remaining = bike_session(MON + timedelta(days=4))
+    r = review([remaining], [bike_workout(MON)], MON + timedelta(days=2))
+    dup = [i for i in r.impacts if i.impact == "duplicate_stimulus"]
+    assert len(dup) == 1 and dup[0].session_id == remaining.id and "100%" in dup[0].evidence[0]
+
+
+def test_no_duplicate_when_unplanned_dose_is_small():
+    small = bike_workout(MON)
+    small.analytics.intervals.efforts = small.analytics.intervals.efforts[:1]
+    r = review([bike_session(MON + timedelta(days=4))], [small], MON + timedelta(days=2))
+    assert not [i for i in r.impacts if i.impact == "duplicate_stimulus"]
+
+
+def test_hard_too_soon_across_sports_within_48h():
+    tuesday_swim, thursday_swim = swim_session(MON + timedelta(days=1)), swim_session(MON + timedelta(days=3))
+    r = review([tuesday_swim, thursday_swim], [bike_workout(MON)], MON + timedelta(days=1))
+    soon = [i for i in r.impacts if i.impact == "hard_too_soon"]
+    assert [i.session_id for i in soon] == [tuesday_swim.id] and "24 h" in soon[0].evidence[0]
+
+
+def test_load_over_target_attaches_to_heaviest_remaining():
+    easy = easy_bike_session(MON + timedelta(days=4))
+    big = Workout(id=uuid.uuid4(), athlete_id=AID, date=MON, sport="cross_train", source="manual", distance_m=0,
+                  duration_min=240, rpe=9)
+    r = review([easy], [big], MON + timedelta(days=1))
+    over = [i for i in r.impacts if i.impact == "load_over_target"]
+    assert len(over) == 1 and over[0].session_id == easy.id
+    assert r.done_load_au > r.planned_load_au * 1.08
+
+
+def test_no_load_impact_when_within_rail():
+    r = review([bike_session(MON + timedelta(days=4))], [], MON + timedelta(days=1))
+    assert not [i for i in r.impacts if i.impact == "load_over_target"]
+
+
+def test_unsupported_sport_unplanned_work_counts_load_but_has_no_kind():
+    w = Workout(id=uuid.uuid4(), athlete_id=AID, date=MON, sport="strength", source="manual", distance_m=0, duration_min=45, rpe=6)
+    r = review([easy_bike_session(MON + timedelta(days=4))], [w], MON + timedelta(days=1))
+    assert r.unplanned_done[0].kind is None and r.done_load_au > 0

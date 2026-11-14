@@ -16,8 +16,16 @@ from pydantic import BaseModel, Field
 
 from swim_coach.adapt import WELLNESS_RED_THRESHOLD
 from swim_coach.execution_score import FADE_FREE_PCT, INTENSITY_MATCH_MIN_IN_BAND_PCT
-from swim_coach.load import wellness_baseline_deviation, wellness_composite
-from swim_coach.models import Athlete, WeekPlan, Wellness, Workout
+from swim_coach.load import (
+    estimate_hr_max,
+    estimate_hr_rest,
+    session_load,
+    session_target_load_au,
+    wellness_baseline_deviation,
+    wellness_composite,
+)
+from swim_coach.models import Athlete, Session, WeekPlan, Wellness, Workout
+from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
 from swim_coach.quality import match_workout_to_session
 from swim_coach.stimulus import (
     ExecutedStimulus,
@@ -41,6 +49,10 @@ RPE_MARGINAL_MIN = 9  # session RPE at or above this blocks progress
 CONSECUTIVE_REPEATS_TO_REDUCE = 2
 RECOVERY_WINDOW_DAYS = 2  # wellness rows on the 1-2 days after the session
 RECOVERY_DEVIATION_CONCERNING_PCT = 5.0  # mirrors web/src/plan.js WELLNESS_DEVIATION_CONCERNING_PCT
+DUPLICATE_STIMULUS_FRACTION = 0.75  # unplanned work this share of a planned dose already delivered it
+HARD_RECOVERY_WINDOW_H = 48.0  # hours a hard session needs after tempo/threshold/vo2/long work
+HARD_KINDS = frozenset({"tempo", "threshold", "vo2", "mixed"})
+HARD_OR_LONG_KINDS = HARD_KINDS | {"long"}
 
 Grade = Literal["clean", "marginal", "poor"]
 
@@ -324,3 +336,189 @@ def read_progression(ledger: list[StimulusRecord], *, as_of: date) -> list[Progr
         profiles[profile.name] = profile
         groups.setdefault((profile.name, record.kind), []).append(record)
     return [_read_group(s, k, recs, profiles[s], as_of) for (s, k), recs in sorted(groups.items())]
+
+
+# --- unplanned work: week stimulus review ------------------------------------------------------
+
+ImpactType = Literal["duplicate_stimulus", "hard_too_soon", "load_over_target"]
+
+
+class SessionStimulus(BaseModel):
+    """A planned session's stimulus and, when done, what was delivered."""
+
+    session_id: UUID
+    date: date
+    sport: str
+    kind: StimulusKind | None = None
+    planned_dose: StimulusDose | None = None
+    executed: ExecutedStimulus | None = None
+    load_au: float | None = None
+
+
+class UnplannedWork(BaseModel):
+    """A workout this week that matched no planned session."""
+
+    workout_id: UUID
+    date: date
+    sport: str
+    kind: StimulusKind | None = None
+    executed: ExecutedStimulus | None = None
+    load_au: float
+
+
+class RemainingImpact(BaseModel):
+    """How done work affects one remaining planned session. Advisory; nothing is rescheduled."""
+
+    session_id: UUID
+    date: date
+    sport: str
+    kind: StimulusKind | None = None
+    impact: ImpactType
+    evidence: list[str]
+
+
+class WeekStimulusReview(BaseModel):
+    """The week containing `as_of`: stimuli planned and done, missed, unplanned, and impacts."""
+
+    week_start: date
+    as_of: date
+    planned_done: list[SessionStimulus] = Field(default_factory=list)
+    planned_missed: list[SessionStimulus] = Field(default_factory=list)
+    remaining: list[SessionStimulus] = Field(default_factory=list)
+    unplanned_done: list[UnplannedWork] = Field(default_factory=list)
+    impacts: list[RemainingImpact] = Field(default_factory=list)
+    planned_load_au: float = 0.0
+    done_load_au: float = 0.0
+    remaining_load_au: float = 0.0
+
+
+def _workout_load(workout: Workout, athlete: Athlete, hr_max: float | None, wellness: list[Wellness]) -> float:
+    return session_load(
+        workout,
+        hr_max=hr_max,
+        hr_rest=estimate_hr_rest(wellness, workout.date),
+        sex=athlete.sex,
+        css_pace_s_per_100m=athlete.css_pace_s_per_100m,
+        lthr_bpm=athlete.lthr_bpm,
+        ftp_watts=athlete.ftp_watts,
+    ).value
+
+
+def _unit_of(sport: str) -> Unit | None:
+    profile = profile_for(sport)
+    return profile.unit if profile else None
+
+
+def _duplicate_impact(remaining: SessionStimulus, unplanned: list[UnplannedWork]) -> RemainingImpact | None:
+    dose, unit = remaining.planned_dose, _unit_of(remaining.sport)
+    if dose is None or unit is None:
+        return None
+    evidence: list[str] = []
+    for u in unplanned:
+        if u.executed is None or u.executed.dose.kind != dose.kind or profile_for(u.sport) is not profile_for(remaining.sport):
+            continue
+        fraction = u.executed.dose.fraction_of(dose, unit)
+        if fraction is not None and fraction >= DUPLICATE_STIMULUS_FRACTION:
+            evidence.append(
+                f"Unplanned {u.sport} on {u.date.isoformat()} already delivered {dose.kind} at {fraction:.0%} of this "
+                f"session's planned dose ({_fmt(u.executed.dose.work_in(unit), unit)} vs {_fmt(dose.work_in(unit), unit)}); "
+                f"the duplicate threshold is {DUPLICATE_STIMULUS_FRACTION:.0%}."
+            )
+    return _impact(remaining, "duplicate_stimulus", evidence)
+
+
+def _hard_too_soon_impact(remaining: SessionStimulus, unplanned: list[UnplannedWork]) -> RemainingImpact | None:
+    if remaining.kind not in HARD_KINDS:
+        return None
+    evidence = [
+        f"{remaining.kind} session on {remaining.date.isoformat()} is {(remaining.date - u.date).days * 24:.0f} h after an "
+        f"unplanned {u.executed.dose.kind} {u.sport} workout on {u.date.isoformat()} (under {HARD_RECOVERY_WINDOW_H:.0f} h)."
+        for u in unplanned
+        if u.executed is not None
+        and u.executed.dose.kind in HARD_OR_LONG_KINDS
+        and 0 <= (remaining.date - u.date).days * 24 < HARD_RECOVERY_WINDOW_H
+    ]
+    return _impact(remaining, "hard_too_soon", evidence)
+
+
+def _impact(remaining: SessionStimulus, impact: ImpactType, evidence: list[str]) -> RemainingImpact | None:
+    if not evidence:
+        return None
+    return RemainingImpact(session_id=remaining.session_id, date=remaining.date, sport=remaining.sport,
+                           kind=remaining.kind, impact=impact, evidence=evidence)
+
+
+def _load_over_target_impact(review: WeekStimulusReview) -> RemainingImpact | None:
+    projected = review.done_load_au + review.remaining_load_au
+    limit = review.planned_load_au * (1 + WEEKLY_VOLUME_RAMP_CAP)
+    if review.planned_load_au <= 0 or not review.remaining or projected <= limit:
+        return None
+    heaviest = max(review.remaining, key=lambda r: r.load_au or 0.0)
+    return _impact(heaviest, "load_over_target", [
+        f"Done {review.done_load_au:.0f} AU plus {review.remaining_load_au:.0f} AU still planned is {projected:.0f} AU, "
+        f"over the week's planned {review.planned_load_au:.0f} AU by more than the {WEEKLY_VOLUME_RAMP_CAP:.0%} weekly ramp rail "
+        f"(limit {limit:.0f} AU). Attached to the heaviest remaining session ({heaviest.load_au or 0:.0f} AU)."
+    ])
+
+
+def _session_entry(session: Session, athlete: Athlete, executed: ExecutedStimulus | None, load: float | None) -> SessionStimulus:
+    dose = planned_dose(session, athlete)
+    return SessionStimulus(session_id=session.id, date=session.date, sport=session.sport,
+                           kind=dose.kind if dose else None, planned_dose=dose, executed=executed, load_au=load)
+
+
+def _match_week(workouts: list[Workout], sessions: list[Session]) -> dict[UUID, Session | None]:
+    return {w.id: match_workout_to_session(w, sessions, other_workouts=[o for o in workouts if o is not w]) for w in workouts}
+
+
+def week_stimulus_review(
+    week_plan: WeekPlan,
+    workouts: list[Workout],
+    athlete: Athlete,
+    wellness: list[Wellness],
+    *,
+    as_of: date,
+) -> WeekStimulusReview:
+    """For the Monday-Sunday week containing `as_of`: planned-and-done, planned-and-missed (date
+    passed), remaining, and unplanned stimuli, plus an impact on each remaining planned session when
+    unplanned work duplicated its stimulus (>= 75% of its dose), puts it under 48 h after hard or
+    long work, or pushes the week's load past planned by more than the weekly ramp rail (attached to
+    the heaviest remaining session). Skipped and replaced sessions count as missed / ignored."""
+    start = as_of - timedelta(days=as_of.weekday())
+    done = [w for w in workouts if start <= w.date <= min(as_of, start + timedelta(days=6))]
+    sessions = [s for s in week_plan.sessions if s.status != "replaced"]
+    matches = _match_week(done, sessions)
+    hr_max = estimate_hr_max(workouts)
+    loads = {w.id: _workout_load(w, athlete, hr_max, wellness) for w in done}
+    review = WeekStimulusReview(week_start=start, as_of=as_of, done_load_au=sum(loads.values()))
+    matched_ids = {s.id for s in matches.values() if s is not None}
+    for w in done:
+        session = matches[w.id]
+        executed = executed_dose(w, athlete, session)
+        if session is None:
+            review.unplanned_done.append(UnplannedWork(
+                workout_id=w.id, date=w.date, sport=w.sport, kind=executed.dose.kind if executed else None,
+                executed=executed, load_au=loads[w.id]))
+        else:
+            review.planned_done.append(_session_entry(session, athlete, executed, loads[w.id]))
+    for session in sessions:
+        if session.id in matched_ids:
+            continue
+        entry = _session_entry(session, athlete, None, session_target_load_au(session, athlete))
+        if session.date < as_of or session.status == "skipped":
+            review.planned_missed.append(entry)
+        else:
+            review.remaining.append(entry)
+    review.planned_load_au = sum(session_target_load_au(s, athlete) for s in sessions)
+    review.remaining_load_au = sum(e.load_au or 0.0 for e in review.remaining)
+    review.impacts = _impacts(review)
+    return review
+
+
+def _impacts(review: WeekStimulusReview) -> list[RemainingImpact]:
+    found: list[RemainingImpact | None] = []
+    for remaining in review.remaining:
+        found.append(_duplicate_impact(remaining, review.unplanned_done))
+        found.append(_hard_too_soon_impact(remaining, review.unplanned_done))
+    found.append(_load_over_target_impact(review))
+    return [i for i in found if i is not None]
