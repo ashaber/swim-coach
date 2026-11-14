@@ -25,6 +25,7 @@ import yaml
 from pydantic import ValidationError
 
 from swim_coach.event_groups import effective_target, find_event
+from swim_coach.formatting import iso_week_str
 from swim_coach.adapt import adapt_week
 from swim_coach.analysis import build_analysis_context
 from swim_coach.analytics import CARDIAC_DRIFT_FLAG_PCT
@@ -88,11 +89,6 @@ from swim_coach.research_queue import (
 )
 from swim_coach.store import FileStore, StoreInterface
 from swim_coach.zones import css_from_test, zone_table
-
-
-def _iso_week(d: date) -> str:
-    year, week, _ = d.isocalendar()
-    return f"{year}-W{week:02d}"
 
 
 def parse_time_to_s(value: str) -> float:
@@ -429,7 +425,7 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
     workouts = store.list_workouts(slug)
     wellness = store.list_wellness(slug)
 
-    volume_by_week = {_iso_week(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
+    volume_by_week = {iso_week_str(ws): weekly_volume_m(workouts, ws) for ws in week_starts}
 
     # `athlete`/`wellness` unlock the HR-TRIMP (tier 2) and swim pace-IF
     # (tier 3) fallbacks for workouts with no logged RPE -- see
@@ -445,7 +441,7 @@ def _cmd_summarize(args: argparse.Namespace, store: StoreInterface) -> int:
 
     planned_sessions = []
     for ws in week_starts:
-        week_plan = store.load_week(slug, _iso_week(ws))
+        week_plan = store.load_week(slug, iso_week_str(ws))
         if week_plan is not None:
             planned_sessions.extend(week_plan.sessions)
     window_workouts = [w for w in workouts if span_start <= w.date <= span_end]
@@ -509,7 +505,7 @@ def _cmd_adapt(args: argparse.Namespace, store: StoreInterface) -> int:
         )
 
     current_week_start = week_start - timedelta(days=7)
-    current_iso = _iso_week(current_week_start)
+    current_iso = iso_week_str(current_week_start)
     current_week = store.load_week(slug, current_iso)
     if current_week is None:
         return _error(

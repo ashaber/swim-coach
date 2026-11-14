@@ -70,6 +70,7 @@ from swim_coach.health_vocab import RESTRICTION_SEVERITY
 from swim_coach.analysis import analytics_for_coach
 from swim_coach.athlete_time import athlete_local_date, athlete_today
 from swim_coach.event_groups import group_of
+from swim_coach.formatting import iso_week_str
 from swim_coach.library_review import (
     REF_ENTRY_RE,
     RefEntry,
@@ -1686,11 +1687,6 @@ def build_system(
 
 
 # --- engine reuse: summarize rollup -----------------------------------------
-
-
-def iso_week_str(d: date) -> str:
-    year, week, _ = d.isocalendar()
-    return f"{year}-W{week:02d}"
 
 
 def _rollup_window(as_of: date, weeks: int) -> tuple[date, date, list[date]]:

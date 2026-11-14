@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 
 from swim_coach.analysis import AnalysisContext
 from swim_coach.analysis import build_analysis_context as engine_build_analysis_context
+from swim_coach.formatting import iso_week_str
 from swim_coach.models import Session, Workout
 from swim_coach.parse_files import WorkoutDraft
 from swim_coach.quality import match_workout_to_session
@@ -120,9 +121,6 @@ def enrich_draft(
     return draft
 
 
-def _iso_week(d) -> str:
-    year, week, _ = d.isocalendar()
-    return f"{year}-W{week:02d}"
 
 
 def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> Session | None:
@@ -134,7 +132,7 @@ def find_planned_session(store: StoreInterface, slug: str, workout: Workout) -> 
     sessions: list[Session] = []
     seen: set[str] = set()
     for delta in (-7, 0, 7):
-        iso = _iso_week(workout.date + timedelta(days=delta))
+        iso = iso_week_str(workout.date + timedelta(days=delta))
         if iso in seen:
             continue
         seen.add(iso)

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from swim_coach.athlete_time import athlete_today
+from swim_coach.formatting import iso_week_str
 from swim_coach.models import AllowedEmail, Athlete, Event, MacroPlan, WeekPlan
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.store import StoreInterface
@@ -68,14 +69,6 @@ class ProvisionResult:
     # step ran. `cli.py`'s `onboard` surfaces this verbatim in its JSON
     # summary so a degraded run is never silently incomplete.
     skipped: list[str] = field(default_factory=list)
-
-
-def _iso_week(d: date) -> str:
-    """Mirrors `swim_coach.cli`'s own private `_iso_week` -- both are a
-    3-line wrapper around `date.isocalendar()`, not worth a cross-module
-    import for."""
-    year, week, _ = d.isocalendar()
-    return f"{year}-W{week:02d}"
 
 
 def provision_athlete(
@@ -173,7 +166,7 @@ def provision_athlete(
         store.save_macro(athlete.slug, macro)
 
         week_start = macro.blocks[0].start_date
-        iso_week = _iso_week(week_start)
+        iso_week = iso_week_str(week_start)
         week = generate_week(
             athlete,
             macro,
