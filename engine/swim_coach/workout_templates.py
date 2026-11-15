@@ -341,7 +341,7 @@ def _validate_template_semantics(template: WorkoutTemplate, file_path: Path) -> 
     load time -- see this module's own docstring for the reverse dependency
     plan.py has on this module already).
     """
-    from swim_coach.plan import (
+    from swim_coach.workout_builders.swim import (
         ADDITIONAL_SWIM_BASE_BLOCK_REP_M,
         ADDITIONAL_SWIM_BUILD_BLOCK_REP_M,
         ADDITIONAL_SWIM_COOL_DOWN_SHARE,
@@ -890,7 +890,7 @@ def compute_facets(template: WorkoutTemplate) -> TemplateFacets:
     be circular (`plan.py` imports this module), so the import is deferred
     to call time, same as those two existing call sites.
     """
-    from swim_coach.plan import (
+    from swim_coach.workout_builders.swim import (
         ADDITIONAL_SWIM_BASE_BLOCK_REP_M,
         ADDITIONAL_SWIM_BUILD_BLOCK_REP_M,
         ADDITIONAL_SWIM_COOL_DOWN_SHARE,

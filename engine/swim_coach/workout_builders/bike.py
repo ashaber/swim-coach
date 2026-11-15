@@ -5,12 +5,16 @@ from __future__ import annotations
 from typing import Callable, Literal
 
 from swim_coach.models import (
+    Athlete,
     WorkoutRepeat,
     WorkoutStep,
     WorkoutStepOrRepeat,
     WorkoutStructure,
     WorkoutTarget,
 )
+from swim_coach.stimulus import walk_leaves
+from swim_coach.workout_builders.intent import WorkoutIntent
+from swim_coach.workout_builders.registry import BuildResult, ParamRange, WorkoutBuilder, register
 from swim_coach.zones import bike_zone_table
 
 BIKE_WARMUP_COOLDOWN_MIN = 5.0
@@ -1121,3 +1125,348 @@ def _bike_midweek_quality_structure(ftp_watts: float | None) -> WorkoutStructure
             "2003, library/24)."
         ),
     )
+
+
+def _bike_intensity(zone: str, ftp_watts: float | None) -> dict:
+    """`Session.intensity` dict for one bike session at `zone` -- shared by
+    every bike-session builder in this module (`_bike_week_sessions`,
+    `_bike_final_taper_sessions`) so all of them resolve `ftp_watts` the
+    same way: absolute watt bounds (`ftp_watts_lo`/`ftp_watts_hi`) via
+    `zones.bike_zone_table` once `ftp_watts` is known, else the zone name
+    alone -- the same graceful partial-data convention `_bike_step`'s own
+    docstring documents for `WorkoutTarget`. Deliberately no `"anchor"` key
+    -- see `_bike_week_sessions`'s own docstring for why.
+    """
+    intensity: dict = {"zone": zone}
+    if ftp_watts is not None:
+        zone_row = bike_zone_table(ftp_watts)[zone]
+        intensity["ftp_watts_lo"] = round(zone_row["watts_lo"], 0)
+        intensity["ftp_watts_hi"] = (
+            round(zone_row["watts_hi"], 0) if zone_row["watts_hi"] is not None else None
+        )
+    return intensity
+
+
+# --- registered archetypes (the workout compiler's bike builders) ----------------------------------
+#
+# Explicit-reps ranges below are Coach judgment (library/24-cycling-periodization-intervals.md,
+# "Workout compiler: explicit-reps ranges"): wider than the auto-fit ranges above (which stay the
+# library's 2-3 / 3-5 / 1-2 reps) because an explicit coach request may go beyond the default
+# shape, but bounded so a typo cannot compile into an unrideable session.
+BIKE_TOTAL_MIN_RANGE = ParamRange(10, 1440, "minutes")
+BIKE_EXPLICIT_REPS_RANGE = ParamRange(1, 10)
+BIKE_THRESHOLD_REPS_RANGE = ParamRange(1, 6)
+BIKE_THRESHOLD_REP_S_RANGE = ParamRange(300, 1800, "seconds")
+BIKE_LONG_REST_S_RANGE = ParamRange(30, 900, "seconds")
+BIKE_RACE_PACE_REP_S_RANGE = ParamRange(60, 300, "seconds")
+BIKE_OVER_UNDER_BLOCKS_RANGE = ParamRange(1, 6, "blocks")
+BIKE_OVER_UNDER_CYCLES_RANGE = ParamRange(1, 6, "on/off cycles per block")
+BIKE_OVER_UNDER_LEG_S_RANGE = ParamRange(30, 300, "seconds per over and per under")
+BIKE_SHORT_SHORT_SETS_RANGE = ParamRange(1, 4, "sets")
+BIKE_SHORT_SHORT_REPS_RANGE = ParamRange(4, 20, "reps per set")
+BIKE_SHORT_SHORT_ON_S_RANGE = ParamRange(10, 90, "seconds on")
+BIKE_SHORT_SHORT_OFF_S_RANGE = ParamRange(5, 90, "seconds off between reps")
+BIKE_OPENERS_RAMPS_RANGE = ParamRange(1, 6, "ramps")
+BIKE_OPENERS_REST_S_RANGE = ParamRange(60, 600, "seconds")
+BIKE_THRESHOLD_ZONE_RANGE = ParamRange(3, 5, "Z3-Z5")
+BIKE_ENDURANCE_ZONE_RANGE = ParamRange(1, 2, "Z1-Z2")
+
+_MAIN_LABELS = {
+    "sustained_threshold": ("sustained threshold intervals", "Threshold interval"),
+    "race_pace": ("race-pace intervals", "Race-pace interval"),
+}
+
+
+def _zone_from(intent: WorkoutIntent, rng: ParamRange, default: str, adj: list[str]) -> str:
+    if intent.target_zone is None:
+        return default
+    return f"Z{int(rng.clamp('target_zone', int(intent.target_zone[1:]), adj))}"
+
+
+def _items_seconds(items: list[WorkoutStepOrRepeat]) -> float:
+    leaves = walk_leaves(WorkoutStructure(items=items), time_only=True)
+    return sum((leaf.duration_s or 0.0) * leaf.reps for leaf in leaves)
+
+
+def _assemble_session(
+    main: list[WorkoutStepOrRepeat], asked_min: float | None, ftp: float | None, adj: list[str]
+) -> WorkoutStructure:
+    """Warm-up + main + cool-down; the asked total is filled with easy spin when the main block is
+    shorter, and grows (recorded by the compiler's total check) when the main block is longer."""
+    need = _items_seconds(main)
+    keep = round(BIKE_WARMUP_COOLDOWN_MIN * 60)
+    warm, cool, avail = _bike_warmup_cooldown_reserve(asked_min) if asked_min else (keep, keep, need)
+    if need > avail:
+        warm = cool = keep
+        avail = need
+    items: list[WorkoutStepOrRepeat] = [_bike_step("Warm-up, easy spin", "warmup", warm, "Z1", ftp)] if warm else []
+    items.extend(main)
+    fill = avail - need
+    if fill >= 30:
+        items.append(_bike_step("Easy spin, fill remaining time", "recovery", fill, "Z1", ftp))
+        adj.append(f"added {fill / 60:.0f} min easy spin to reach the asked {asked_min:g} min total")
+    if cool:
+        items.append(_bike_step("Cool-down, easy spin", "cooldown", cool, "Z1", ftp))
+    return WorkoutStructure(items=items)
+
+
+def _main_seconds_for(asked_min: float | None) -> float | None:
+    return _bike_warmup_cooldown_reserve(asked_min)[2] if asked_min else None
+
+
+def _reps_explicit(
+    archetype: str, intent: WorkoutIntent, ftp: float | None, main_s: float | None, zone: str, adj: list[str]
+) -> list[WorkoutStepOrRepeat]:
+    work_default, rest_default, lo, hi = {
+        "sustained_threshold": (
+            BIKE_SUSTAINED_THRESHOLD_WORK_S,
+            BIKE_SUSTAINED_THRESHOLD_REST_S,
+            BIKE_SUSTAINED_THRESHOLD_MIN_REPS,
+            BIKE_SUSTAINED_THRESHOLD_MAX_REPS,
+        ),
+        "race_pace": (BIKE_RACE_PACE_WORK_S, BIKE_RACE_PACE_REST_S, BIKE_RACE_PACE_MIN_REPS, BIKE_RACE_PACE_MAX_REPS),
+    }[archetype]
+    rep_rng = BIKE_THRESHOLD_REP_S_RANGE if archetype == "sustained_threshold" else BIKE_RACE_PACE_REP_S_RANGE
+    reps_rng = BIKE_THRESHOLD_REPS_RANGE if archetype == "sustained_threshold" else BIKE_EXPLICIT_REPS_RANGE
+    work_s = rep_rng.clamp("rep_duration_s", intent.rep_duration_s or work_default, adj)
+    rest_s = BIKE_LONG_REST_S_RANGE.clamp("rest_s", intent.rest_s if intent.rest_s is not None else rest_default, adj)
+    label, work_label = _MAIN_LABELS[archetype]
+    if intent.reps is not None:
+        reps = int(reps_rng.clamp("reps", intent.reps, adj))
+        return _bike_reps_with_rest_main(
+            label, work_label, zone, work_s, "Recovery between reps", reps, reps, rest_s, reps * (work_s + rest_s), ftp
+        )
+    return _bike_reps_with_rest_main(
+        label, work_label, zone, work_s, "Recovery between reps", lo, hi, rest_s * BIKE_REST_GAP_CAP_MULTIPLIER, main_s, ftp
+    )
+
+
+def _blocks(
+    label: str,
+    build: Callable[[], WorkoutRepeat],
+    unit_s: float,
+    unit_label: str,
+    zone: str,
+    count: int | None,
+    bounds: tuple[int, int],
+    rest_s: float,
+    main_s: float | None,
+    ftp: float | None,
+    rest_label: str,
+) -> list[WorkoutStepOrRepeat]:
+    """`count` units exactly when given (each followed by `rest_s`), else as many as fit `main_s`."""
+    if count is not None:
+        main, lo, hi, cap = count * (unit_s + rest_s), count, count, rest_s
+    else:
+        main = main_s or bounds[0] * (unit_s + rest_s)
+        (lo, hi), cap = bounds, rest_s * BIKE_REST_GAP_CAP_MULTIPLIER
+    return _bike_blocks_with_rest_main(label, build, unit_s, unit_label, zone, lo, hi, cap, main, ftp, rest_label)
+
+
+def _over_unders_explicit(
+    intent: WorkoutIntent, ftp: float | None, main_s: float | None, adj: list[str]
+) -> list[WorkoutStepOrRepeat]:
+    leg = BIKE_OVER_UNDER_LEG_S_RANGE.clamp("rep_duration_s", intent.rep_duration_s or BIKE_OVER_UNDER_ON_S, adj)
+    cycles = int(BIKE_OVER_UNDER_CYCLES_RANGE.clamp("reps", intent.reps or BIKE_OVER_UNDER_CYCLES_PER_BLOCK, adj))
+    rest_in = intent.rest_s if intent.rest_s is not None else BIKE_OVER_UNDER_BLOCK_REST_S
+    rest = BIKE_LONG_REST_S_RANGE.clamp("rest_s", rest_in, adj)
+    sets = int(BIKE_OVER_UNDER_BLOCKS_RANGE.clamp("sets", intent.sets, adj)) if intent.sets else None
+
+    def build() -> WorkoutRepeat:
+        return WorkoutRepeat(
+            repeat_mode="count",
+            count=cycles,
+            steps=[
+                _bike_step("Over — supra-threshold", "interval", leg, BIKE_OVER_UNDER_OVER_ZONE, ftp),
+                _bike_step("Under — sub-threshold", "interval", leg, BIKE_OVER_UNDER_UNDER_ZONE, ftp),
+            ],
+        )
+
+    bounds = (BIKE_OVER_UNDER_MIN_BLOCKS, BIKE_OVER_UNDER_MAX_BLOCKS)
+    unit_label = f"{cycles} x {leg:g}s/{leg:g}s over/under block"
+    return _blocks(
+        "over/unders", build, cycles * 2 * leg, unit_label, BIKE_OVER_UNDER_OVER_ZONE, sets, bounds, rest, main_s, ftp,
+        "Recovery between blocks",
+    )
+
+
+def _short_short_explicit(
+    intent: WorkoutIntent, ftp: float | None, main_s: float | None, adj: list[str]
+) -> list[WorkoutStepOrRepeat]:
+    on = BIKE_SHORT_SHORT_ON_S_RANGE.clamp("rep_duration_s", intent.rep_duration_s or BIKE_SHORT_SHORT_ON_S, adj)
+    off_in = intent.rest_s if intent.rest_s is not None else BIKE_SHORT_SHORT_OFF_S
+    off = BIKE_SHORT_SHORT_OFF_S_RANGE.clamp("rest_s", off_in, adj)
+    reps = int(BIKE_SHORT_SHORT_REPS_RANGE.clamp("reps", intent.reps or BIKE_SHORT_SHORT_REPS_PER_SET, adj))
+    sets = int(BIKE_SHORT_SHORT_SETS_RANGE.clamp("sets", intent.sets, adj)) if intent.sets else None
+
+    def build() -> WorkoutRepeat:
+        return WorkoutRepeat(
+            repeat_mode="count",
+            count=reps,
+            steps=[
+                _bike_step("Short-short ON", "interval", on, BIKE_SHORT_SHORT_ZONE, ftp),
+                _bike_step("Short-short OFF", "recovery", off, "Z1", ftp),
+            ],
+        )
+
+    bounds = (BIKE_SHORT_SHORT_MIN_SETS, BIKE_SHORT_SHORT_MAX_SETS)
+    return _blocks(
+        "short-short VO2 intervals", build, reps * (on + off), f"{reps} x {on:g}s/{off:g}s set", BIKE_SHORT_SHORT_ZONE,
+        sets, bounds, BIKE_SHORT_SHORT_SET_REST_S, main_s, ftp, "Recovery between sets",
+    )
+
+
+def _openers_explicit(
+    intent: WorkoutIntent, ftp: float | None, main_s: float | None, adj: list[str]
+) -> list[WorkoutStepOrRepeat]:
+    ramps = int(BIKE_OPENERS_RAMPS_RANGE.clamp("reps", intent.reps, adj)) if intent.reps else None
+    rest_in = intent.rest_s if intent.rest_s is not None else BIKE_OPENERS_REST_S
+    rest = BIKE_OPENERS_REST_S_RANGE.clamp("rest_s", rest_in, adj)
+    unit_s = BIKE_OPENERS_RAMP_Z3_S + BIKE_OPENERS_RAMP_Z4_S + BIKE_OPENERS_RAMP_Z5_S
+    unit_label = (
+        f"ramp ({BIKE_OPENERS_RAMP_Z3_S:.0f}s Z3 / {BIKE_OPENERS_RAMP_Z4_S:.0f}s Z4 / {BIKE_OPENERS_RAMP_Z5_S:.0f}s Z5)"
+    )
+    return _blocks(
+        "openers (pre-race primers, progressive ramp)", lambda: _bike_openers_ramp_unit(ftp), unit_s, unit_label,
+        BIKE_OPENERS_ZONE, ramps, (BIKE_OPENERS_MIN_REPS, BIKE_OPENERS_MAX_REPS), rest, main_s, ftp,
+        "Full recovery between ramps",
+    )
+
+
+_EXPLICIT_TRIGGERS = ("reps", "rep_duration_s", "rest_s", "sets")
+
+
+def _explicit_items(
+    archetype: str, intent: WorkoutIntent, ftp: float | None, main_s: float | None, zone: str, adj: list[str]
+) -> list[WorkoutStepOrRepeat]:
+    if archetype in _MAIN_LABELS:
+        return _reps_explicit(archetype, intent, ftp, main_s, zone, adj)
+    fn = {
+        "over_unders": _over_unders_explicit,
+        "short_short_vo2": _short_short_explicit,
+        "openers": _openers_explicit,
+    }[archetype]
+    return fn(intent, ftp, main_s, adj)
+
+
+def _build_hard(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
+    adj: list[str] = []
+    ftp = athlete.ftp_watts
+    arch = intent.archetype
+    default_zone = BIKE_INTERVAL_TEMPLATE_META[arch]["zone"]
+    zone = default_zone
+    if arch == "sustained_threshold":
+        zone = _zone_from(intent, BIKE_THRESHOLD_ZONE_RANGE, default_zone, adj)
+    explicit = zone != default_zone or any(getattr(intent, f) is not None for f in _EXPLICIT_TRIGGERS)
+    if not explicit and not intent.total_duration_min:
+        raise ValueError(f"bike archetype {arch!r} needs total_duration_min or reps with rep_duration_s")
+    asked = None
+    if intent.total_duration_min:
+        asked = BIKE_TOTAL_MIN_RANGE.clamp("total_duration_min", intent.total_duration_min, adj)
+    if explicit:
+        main = _explicit_items(arch, intent, ftp, _main_seconds_for(asked), zone, adj)
+        structure = _assemble_session(main, asked, ftp, adj)
+    else:
+        structure = _bike_hard_session_structure(arch, asked, ftp)
+    return BuildResult(structure=structure, intensity=_bike_intensity(zone, ftp), adjustments=adj)
+
+
+def _build_endurance(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
+    adj: list[str] = []
+    if not intent.total_duration_min:
+        raise ValueError("bike archetype 'endurance' needs total_duration_min (bike sessions are sized in time)")
+    zone = _zone_from(intent, BIKE_ENDURANCE_ZONE_RANGE, "Z2", adj)
+    minutes = BIKE_TOTAL_MIN_RANGE.clamp("total_duration_min", intent.total_duration_min, adj)
+    structure = _bike_session_structure(zone, minutes, athlete.ftp_watts)
+    return BuildResult(structure=structure, intensity=_bike_intensity(zone, athlete.ftp_watts), adjustments=adj)
+
+
+def _fixed_builder(
+    make: Callable[[float | None], WorkoutStructure], zone: str
+) -> Callable[[WorkoutIntent, Athlete], BuildResult]:
+    def build(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
+        return BuildResult(structure=make(athlete.ftp_watts), intensity=_bike_intensity(zone, athlete.ftp_watts))
+
+    return build
+
+
+_BIKE = frozenset({"bike"})
+_TOTAL = {"total_duration_min": BIKE_TOTAL_MIN_RANGE}
+_HARD_SPECS: tuple[tuple[str, str, str, dict[str, ParamRange]], ...] = (
+    (
+        "sustained_threshold",
+        "threshold",
+        "Long threshold reps (default 2-3 x 10 min Z4) with near-full recovery.",
+        {
+            **_TOTAL,
+            "reps": BIKE_THRESHOLD_REPS_RANGE,
+            "rep_duration_s": BIKE_THRESHOLD_REP_S_RANGE,
+            "rest_s": BIKE_LONG_REST_S_RANGE,
+            "target_zone": BIKE_THRESHOLD_ZONE_RANGE,
+        },
+    ),
+    (
+        "over_unders",
+        "mixed",
+        "Over/under blocks (default 2-4 blocks of 2 x 90s Z4 over / Z3 under).",
+        {
+            **_TOTAL,
+            "sets": BIKE_OVER_UNDER_BLOCKS_RANGE,
+            "reps": BIKE_OVER_UNDER_CYCLES_RANGE,
+            "rep_duration_s": BIKE_OVER_UNDER_LEG_S_RANGE,
+            "rest_s": BIKE_LONG_REST_S_RANGE,
+        },
+    ),
+    (
+        "short_short_vo2",
+        "vo2",
+        "Short-short VO2 sets (default 1-2 sets of 10 x 30s on / 15s off, Z5).",
+        {
+            **_TOTAL,
+            "sets": BIKE_SHORT_SHORT_SETS_RANGE,
+            "reps": BIKE_SHORT_SHORT_REPS_RANGE,
+            "rep_duration_s": BIKE_SHORT_SHORT_ON_S_RANGE,
+            "rest_s": BIKE_SHORT_SHORT_OFF_S_RANGE,
+        },
+    ),
+    (
+        "race_pace",
+        "vo2",
+        "Race-pace reps (default 3-5 x 2.5 min Z5) with near-full recovery.",
+        {
+            **_TOTAL,
+            "reps": BIKE_EXPLICIT_REPS_RANGE,
+            "rep_duration_s": BIKE_RACE_PACE_REP_S_RANGE,
+            "rest_s": BIKE_LONG_REST_S_RANGE,
+        },
+    ),
+    (
+        "openers",
+        "mixed",
+        "Taper openers: 2-4 progressive ramps (Z3, Z4, brief Z5) with full recovery.",
+        {**_TOTAL, "reps": BIKE_OPENERS_RAMPS_RANGE, "rest_s": BIKE_OPENERS_REST_S_RANGE},
+    ),
+)
+_FIXED_SPECS = (
+    ("prerace_primer", "mixed", "Fixed day-before-race primer: 3 progressive ramps, about 30 min.",
+     _bike_prerace_primer_structure, BIKE_OPENERS_ZONE),
+    ("midweek_quality", "mixed", "Fixed race-week quality touch: 4 progressive ramps, about 35 min.",
+     _bike_midweek_quality_structure, BIKE_OPENERS_ZONE),
+    ("ramp_test", "vo2", "Ramp-to-failure FTP test (fixed, 25 min); no power target to hold.",
+     _bike_ramp_test_structure, "Z5"),
+    ("test_2x20", "threshold", "Two 20-min maximal efforts FTP test; RPE-paced, no power target.",
+     _bike_2x20_test_structure, "Z4"),
+)
+
+
+def _register_bike_builders() -> None:
+    for arch, kind, summary, params in _HARD_SPECS:
+        register(WorkoutBuilder("bike", arch, kind, summary, _BIKE, params, _build_hard))
+    endurance_params = {**_TOTAL, "target_zone": BIKE_ENDURANCE_ZONE_RANGE}
+    summary = "Flat easy ride (default Z2) with warm-up and cool-down."
+    register(WorkoutBuilder("bike", "endurance", "endurance", summary, _BIKE, endurance_params, _build_endurance))
+    for arch, kind, summary, make, zone in _FIXED_SPECS:
+        register(WorkoutBuilder("bike", arch, kind, summary, _BIKE, {}, _fixed_builder(make, zone)))
+
+
+_register_bike_builders()

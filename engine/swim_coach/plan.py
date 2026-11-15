@@ -29,7 +29,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from swim_coach.event_groups import effective_target, group_span, planning_targets, race_dates
-from swim_coach.formatting import duration_min_for_distance, format_pace_s, round_100
+from swim_coach.formatting import duration_min_for_distance, round_100
 from swim_coach.models import (
     Athlete,
     Event,
@@ -47,11 +47,11 @@ from swim_coach.models import (
 )
 from swim_coach.workout_templates import (
     TemplatePreference,
-    build_main_set_step,
     render_prose,
     resolve_template,
 )
 from swim_coach.stimulus import intensity_is_hard
+from swim_coach.workout_builders.swim import _additional_swim_structure_template
 from swim_coach.workout_builders.bike import (
     BIKE_INTERVAL_TEMPLATE_META,
     BIKE_INTERVAL_TEMPLATES,
@@ -59,6 +59,7 @@ from swim_coach.workout_builders.bike import (
     BIKE_OPENERS_ZONE,
     BIKE_PRERACE_PRIMER_REPS,
     _bike_hard_session_structure,
+    _bike_intensity,
     _bike_midweek_quality_structure,
     _bike_open_header,
     _bike_prerace_primer_structure,
@@ -66,7 +67,7 @@ from swim_coach.workout_builders.bike import (
     _bike_session_structure,
     _bike_step,
 )
-from swim_coach.zones import bike_zone_table, zone_table
+from swim_coach.zones import zone_table
 
 EventFormat = Literal["single_day", "multi_day_stage"]
 
@@ -641,40 +642,6 @@ DEFAULT_CSS_PACE_S_PER_100M = 100.0
 # (e.g. before their first CSS test), so session duration estimates stay
 # computable. Not cited -- Coach judgment.
 
-ADDITIONAL_SWIM_WARM_UP_SHARE = 0.2
-ADDITIONAL_SWIM_COOL_DOWN_SHARE = 0.1
-ADDITIONAL_SWIM_MIN_WARM_UP_M = 200
-ADDITIONAL_SWIM_MIN_COOL_DOWN_M = 100
-# Coach judgment / practitioner convention -- library/14-swim-set-structure.md
-# ("Session skeleton" section) is explicit that no citable source fixes a
-# warm-up or cool-down proportion; McGowan et al. (2015) grounds only that a
-# warm-up is worthwhile, not its size. This governs ONLY the "additional"
-# pool-independent swim_ow session below -- the Saturday long-swim session
-# (library/06-long-swim-progression.md) stays continuous/negative-split and
-# is untouched by these constants.
-
-ADDITIONAL_SWIM_BASE_BLOCK_REP_M = 300
-ADDITIONAL_SWIM_BUILD_BLOCK_REP_M = 200
-# Coach judgment -- main-set rep length for the two main-set formats below.
-# library/14-swim-set-structure.md's "Main-set format menu" section is
-# explicit that no source ranks these formats; the base-vs-build/peak/taper
-# *emphasis* shift itself is [EVIDENCE: swim] (González-Ravé et al. 2021;
-# Pla et al. 2019), the concrete rep length is not.
-
-# The size of each block-category's main-set format menu (base: 2, build/
-# peak/taper: 4, as of this writing) is no longer a fixed constant here --
-# it's however many templates `engine/swim_coach/workout_templates/*.yaml`
-# ships for that block, read by `swim_coach.workout_templates.
-# render_main_set` at render time. All format *choices* are Coach judgment
-# per library/14-swim-set-structure.md's "Main-set format menu" section
-# ("straight aerobic repeats, descending sets, broken-distance/pyramid sets,
-# and negative-split segments are the shared vocabulary of pool coaching ...
-# offered as legitimate, standard coaching options" -- that file is explicit
-# no source ranks one format as superior). `_additional_swim_structure`'s
-# `selector` picks among the applicable templates via `selector % <count>`,
-# deterministically -- same block + same selector always yields the same
-# template, forever (no random/global state), which is what makes this
-# rotation safe to unit-test and audit.
 
 _WEEKDAY_OFFSETS = {
     "mon": 0,
@@ -1039,109 +1006,6 @@ def _additional_swim_structure(
     return render_prose(template)
 
 
-def _additional_swim_structure_template(
-    macro_block_name: str,
-    distance_m: int,
-    css_pace_s: float,
-    selector: int = 0,
-    template_preference: TemplatePreference | None = None,
-) -> WorkoutStructure:
-    """Build the `WorkoutStructure` TEMPLATE for the "additional"
-    pool-independent aerobic swim_ow session -- the structural counterpart
-    to `_additional_swim_structure`'s prose (see that function's own
-    docstring for the full warm-up/cool-down/main-set-format-menu rationale
-    and citations, which is unchanged here). Callers must guard
-    `distance_m <= 0` themselves (mirroring `_additional_swim_structure`'s
-    own early return) -- there's no meaningful `WorkoutStructure` for "no
-    additional volume this week."
-
-    The warm-up/cool-down steps' `label`s are built here using the SAME
-    concrete, already-CSS-resolved `z2`/`z3`/`z4` zone dicts as the legacy
-    prose function (every real call site already has the athlete's CSS
-    available at this point -- see `generate_week`) -- this is what
-    guarantees byte-identical prose without duplicating the warm-up/
-    cool-down text-formatting logic a second time. Each step's `target`
-    field nonetheless stays the relative `basis="zone"` marker (not the
-    resolved pace numbers already reflected in its label) until
-    `workout_templates.resolve_template` is called -- `render_prose` never
-    reads `target`, so this doesn't affect the prose parity proof, and it
-    keeps the model's relative/resolved distinction real for any consumer
-    (e.g. a future Garmin export) that DOES read `target`.
-    """
-    zones = zone_table(css_pace_s)
-    z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
-
-    warm_up = max(
-        ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE)
-    )
-    # Sized only to choose a sensible rep length / rep count below -- the
-    # actual cool-down (and therefore the session's true total) is
-    # reconciled after reps are picked, so warm-up + main set + cool-down
-    # always sums exactly to `distance_m` instead of drifting by a rep's
-    # worth of rounding (a real bug in an earlier version of this function:
-    # rounding `main_set_total / rep` to the nearest rep, without feeding
-    # that rounding back into the cool-down, could over- or under-state the
-    # printed session total by up to one rep length relative to distance_m).
-    cool_down_budget_estimate = max(
-        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
-    )
-    main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
-
-    z2_range = f"{format_pace_s(z2['pace_lo_s'])}-{format_pace_s(z2['pace_hi_s'])}/100m"
-    warmup_step = WorkoutStep(
-        label=f"{warm_up}m easy, building to Z2 pace ({z2_range}) by the end.",
-        role="warmup",
-        duration_kind="distance_m",
-        duration_value=warm_up,
-        target=WorkoutTarget(basis="zone", zone="Z2"),
-        modality="swim",
-    )
-
-    if macro_block_name == "base":
-        rep = ADDITIONAL_SWIM_BASE_BLOCK_REP_M if main_set_budget >= 1200 else 200
-    else:
-        rep = ADDITIONAL_SWIM_BUILD_BLOCK_REP_M if main_set_budget >= 800 else 100
-    reps = max(1, round(main_set_budget / rep))
-
-    remaining_for_cool_down = distance_m - warm_up - reps * rep
-    # If rounding pushed the main set to consume (almost) everything,
-    # give back one rep so the cool-down doesn't collapse toward 0m.
-    while (
-        reps > 1
-        and remaining_for_cool_down < ADDITIONAL_SWIM_MIN_COOL_DOWN_M
-        and remaining_for_cool_down + rep >= ADDITIONAL_SWIM_MIN_COOL_DOWN_M
-    ):
-        reps -= 1
-        remaining_for_cool_down += rep
-    cool_down = max(0, remaining_for_cool_down)
-
-    # Template menu selection + rendering is fully data-driven -- see
-    # `swim_coach.workout_templates` (the `WorkoutTemplate` YAML library,
-    # `FORMAT_STRATEGIES`, and `build_main_set_step`'s deterministic
-    # `selector % <template count>` rotation, same contract as before this
-    # migration).
-    main_set_step = build_main_set_step(
-        macro_block_name, selector, reps, rep, z2, z3, z4, template_preference
-    )
-
-    cooldown_step = WorkoutStep(
-        label=f"{cool_down}m easy choice of stroke.",
-        role="cooldown",
-        duration_kind="distance_m",
-        duration_value=cool_down,
-        modality="swim",
-    )
-
-    if macro_block_name == "base":
-        why_label = "Why: continuous aerobic-volume emphasis (base-block phase)."
-    else:
-        why_label = (
-            "Why: race-pace-adjacent, broken-distance emphasis -- evidence-based "
-            "phase shift (González-Ravé et al. 2021; Pla et al. 2019)."
-        )
-    why_step = WorkoutStep(label=why_label, role="open", duration_kind="open", modality="swim")
-
-    return WorkoutStructure(items=[warmup_step, main_set_step, cooldown_step, why_step])
 
 
 def _no_coach_pool_purpose(block_name: str) -> str:
@@ -2234,26 +2098,6 @@ def _resolve_bike_session_count(total_duration_min: float, *, target_count: int 
         if hard_min >= DEFAULT_BIKE_SESSION_MIN and easy_min >= DEFAULT_BIKE_SESSION_MIN:
             return n
     return 1
-
-
-def _bike_intensity(zone: str, ftp_watts: float | None) -> dict:
-    """`Session.intensity` dict for one bike session at `zone` -- shared by
-    every bike-session builder in this module (`_bike_week_sessions`,
-    `_bike_final_taper_sessions`) so all of them resolve `ftp_watts` the
-    same way: absolute watt bounds (`ftp_watts_lo`/`ftp_watts_hi`) via
-    `zones.bike_zone_table` once `ftp_watts` is known, else the zone name
-    alone -- the same graceful partial-data convention `_bike_step`'s own
-    docstring documents for `WorkoutTarget`. Deliberately no `"anchor"` key
-    -- see `_bike_week_sessions`'s own docstring for why.
-    """
-    intensity: dict = {"zone": zone}
-    if ftp_watts is not None:
-        zone_row = bike_zone_table(ftp_watts)[zone]
-        intensity["ftp_watts_lo"] = round(zone_row["watts_lo"], 0)
-        intensity["ftp_watts_hi"] = (
-            round(zone_row["watts_hi"], 0) if zone_row["watts_hi"] is not None else None
-        )
-    return intensity
 
 
 def _bike_week_sessions(
