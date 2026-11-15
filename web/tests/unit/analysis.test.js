@@ -101,6 +101,36 @@ describe('buildRawAnalysis', () => {
     expect(m.rounds.rows[0]).toEqual(['1', '2/2', '1/2', '279 W', '150', '+3.1%']);
   });
 
+  it('shows the graded rep rating beside the in-band call, and the ERG ramp trim', () => {
+    const iv = {
+      ...INTERVALS,
+      reps_in_band_pct: 0,
+      rep_ratings: { rated: 2, in_band: 0, below_band_in_zone: 1, dropped_zone: 1, above_band: 0, held_zone_pct: 50, summary: '1 of 2 reps held VO2 (Z5); 1 dropped to threshold (Z4) in round 1' },
+      efforts: [
+        effort(1, { in_target_band: false, avg_w: 315.4, raw_avg_w: 298.1, ramp_trim_s: 5, rep_class: 'below_band_in_zone', landed_zone: 'Z5' }),
+        effort(2, { in_target_band: false, avg_w: 285, rep_class: 'dropped_zone', landed_zone: 'Z4' }),
+        effort(3, { in_target_band: false, avg_w: 345, rep_class: 'above_band', landed_zone: 'Z6' }),
+      ],
+    };
+    const m = buildRawAnalysis({ analytics: { intervals: iv } }, undefined);
+    const rows = Object.fromEntries(m.summary);
+    expect(rows['Reps in band']).toBe('0%');
+    expect(rows['Rep rating']).toBe('1 of 2 reps held VO2 (Z5); 1 dropped to threshold (Z4) in round 1');
+    expect(rows['Steady-state scoring']).toBe('First 5 s of each rep left out (trainer ramp); the table shows the steady average');
+    const [r1, r2, r3] = m.efforts.rows;
+    expect(r1[4]).toBe('315 W (lap 298)');
+    expect(r1[6]).toBe('no, in zone');
+    expect(r2[4]).toBe('285 W');
+    expect(r2[6]).toBe('no, dropped to Z4');
+    expect(r3[6]).toBe('no, over band');
+  });
+
+  it('adds nothing for rows stored before the rating existed', () => {
+    const rows = Object.fromEntries(buildRawAnalysis({ analytics: { intervals: INTERVALS } }, undefined).summary);
+    expect(rows['Rep rating']).toBeUndefined();
+    expect(rows['Steady-state scoring']).toBeUndefined();
+  });
+
   it('handles free-detected efforts (no round, no band)', () => {
     const iv = {
       efforts_detected: 1, detection_basis: 'power', matched_to_prescription: false,

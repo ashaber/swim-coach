@@ -313,3 +313,59 @@ def test_free_ride_section_shows_zones_efforts_matches_and_cost_without_scrollin
     # a free ride has no whole-ride drift line in the Analytics section
     assert 'drift +11.0%' not in page.locator('.detail-view, body').first.inner_text()
     assert _no_horizontal_scroll(page)
+
+
+# --- ERG ride: graded rep rating + ramp-trimmed steady averages -----------------------------
+
+ERG_EFFORTS = [
+    {
+        'n': i + 1, 'start_s': 1352 + i * 60, 'duration_s': 40, 'avg_w': 315.0 + i, 'raw_avg_w': 298.0 + i,
+        'ramp_trim_s': 5, 'avg_hr': 150 + i, 'target_w': 327.5, 'fade_pct': 0.5, 'hr_drift_bpm': 1.0,
+        'verdict': 'under target', 'in_target_band': False, 'round_n': 1, 'rep_in_round': i + 1,
+        'rep_class': 'below_band_in_zone' if i < 2 else 'dropped_zone', 'landed_zone': 'Z5' if i < 2 else 'Z4',
+    }
+    for i in range(3)
+]
+ERG_WORKOUT = {
+    **WORKOUT, 'id': 'w-erg',
+    'analytics': {
+        'avg_power_w': 200, 'normalized_power_w': 230,
+        'intervals': {
+            'efforts_detected': 3, 'detection_basis': 'power', 'matched_to_prescription': True,
+            'prescribed_count': 3, 'detection_source': 'laps', 'reps_completed': 3, 'reps_in_band_pct': 0.0,
+            'target_zone': 'Z5', 'target_band_w': [320, 335], 'efforts': ERG_EFFORTS,
+            'rep_ratings': {
+                'rated': 3, 'in_band': 0, 'below_band_in_zone': 2, 'dropped_zone': 1, 'above_band': 0,
+                'held_zone_pct': 66.7,
+                'summary': '2 of 3 reps held VO2 (Z5); 2 under the 320-335 W band; 1 dropped to threshold (Z4) in round 1',
+            },
+        },
+    },
+    'quality': {'matched': True, 'intensity_match': 'partial', 'execution': EXECUTION},
+}
+
+
+@pytest.fixture(params=[pytest.param({'name': 'chromium', 'vp': {'width': 390, 'height': 844}}, id='chromium-390')])
+def page_erg(request, base_url):
+    pw, browser, ctx, pg, errors = _make_page(request, base_url, PLAN, workouts=[ERG_WORKOUT])
+    try:
+        yield pg
+    finally:
+        _finish(pw, browser, ctx, errors)
+
+
+def test_raw_analysis_shows_rep_rating_and_steady_averages_for_an_erg_ride(page_erg):
+    _open_ride(page_erg)
+    page_erg.locator('[data-a="workout:raw-analysis-toggle"]').click()
+    page_erg.wait_for_selector('.raw-analysis')
+    text = page_erg.locator('.raw-analysis').inner_text()
+    assert 'Rep rating' in text
+    assert '2 of 3 reps held VO2 (Z5)' in text and '1 dropped to threshold (Z4) in round 1' in text
+    assert 'Steady-state scoring' in text
+    efforts = page_erg.locator('.raw-analysis table.raw-table').nth(1)
+    rows = efforts.locator('tbody tr')
+    assert rows.count() == 3
+    first = rows.first.inner_text()
+    assert '315 W (lap 298)' in first and 'no, in zone' in first
+    assert 'no, dropped to Z4' in rows.nth(2).inner_text()
+    assert _no_horizontal_scroll(page_erg)
