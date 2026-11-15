@@ -38,6 +38,13 @@ FADE_ZERO_PCT = 20.0
 # Coach judgment: reps in band at or above this share of completed reps is a
 # "match" for `WorkoutQuality.intensity_match`.
 INTENSITY_MATCH_MIN_IN_BAND_PCT = 70.0
+# Coach judgment: a rep that finished under the band but still inside the prescribed power zone
+# (`IntervalEffort.rep_class == "below_band_in_zone"`) delivered most of the intended stimulus,
+# so it earns this share of an in-band rep's intensity credit; a rep that dropped to a lower zone
+# (a different stimulus) earns none. 0.7 is a judgment call, not a fitted or cited value: it puts
+# a session ridden entirely a few percent under band at the "match" cut-off rather than at zero.
+# library/26-activity-stream-interval-analysis.md ("Graded rep rating").
+BELOW_BAND_IN_ZONE_CREDIT = 0.7
 
 # Coach judgment: race weights. Pacing evenness and late fade are the two
 # reads a coach leans on; start control and lap consistency refine them.
@@ -142,9 +149,16 @@ def workout_execution_score(
             if intervals.target_band_w
             else ""
         )
+        credit = _below_band_in_zone_pct(intervals)
+        detail = f"{intervals.reps_in_band_pct:g}% of completed reps averaged inside the target band{band}"
+        if credit:
+            detail += (
+                f"; a further {credit:g}% finished under the band but in the prescribed zone, "
+                f"credited at {BELOW_BAND_IN_ZONE_CREDIT:g}"
+            )
         parts["intensity"] = (
-            round(intervals.reps_in_band_pct, 1),
-            f"{intervals.reps_in_band_pct:g}% of completed reps averaged inside the target band{band}",
+            round(min(100.0, intervals.reps_in_band_pct + BELOW_BAND_IN_ZONE_CREDIT * credit), 1),
+            detail,
         )
     else:
         parts["intensity"] = (None, "no resolvable watts band (set FTP to score intensity)")
@@ -178,12 +192,23 @@ def workout_execution_score(
     return _assemble("workout", WORKOUT_WEIGHTS, parts)
 
 
+def _below_band_in_zone_pct(intervals: WorkoutIntervals) -> float:
+    """Share (%) of rated reps that finished under the band but inside the prescribed zone."""
+    r = intervals.rep_ratings
+    return round(r.below_band_in_zone / r.rated * 100, 1) if r is not None and r.rated else 0.0
+
+
 def intensity_match(intervals: WorkoutIntervals | None) -> str:
-    """"match"/"mismatch" from the analyzer's in-band share when a prescription
-    was located and a band resolved; "unknown" otherwise."""
+    """"match" when the in-band share clears the cut-off; "partial" when it does not but the
+    reps that finished under the band in the prescribed zone bring it over (the stimulus was
+    delivered, the watts were not); "mismatch" otherwise; "unknown" when no prescription was
+    located or no band resolved."""
     if intervals is None or not intervals.matched_to_prescription or intervals.reps_in_band_pct is None:
         return "unknown"
-    return "match" if intervals.reps_in_band_pct >= INTENSITY_MATCH_MIN_IN_BAND_PCT else "mismatch"
+    if intervals.reps_in_band_pct >= INTENSITY_MATCH_MIN_IN_BAND_PCT:
+        return "match"
+    held = intervals.reps_in_band_pct + _below_band_in_zone_pct(intervals)
+    return "partial" if held >= INTENSITY_MATCH_MIN_IN_BAND_PCT else "mismatch"
 
 
 def race_execution_score(phases: list[RacePhase], laps: list[GpsLapMetrics]) -> ExecutionScore:
