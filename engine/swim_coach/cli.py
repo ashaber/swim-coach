@@ -79,6 +79,8 @@ from swim_coach.parse_files import (
 )
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.plan_check import check_macro
+from swim_coach.progression import build_ledger, read_progression
+from swim_coach.progression_check import build_progression_inputs, check_week_progression
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.research_queue import (
@@ -619,6 +621,43 @@ def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
         today=as_of,
     )
     print(json.dumps({"athlete": slug, "as_of": as_of.isoformat(), **report.to_dict()}))
+    return 0
+
+
+def _macro_week_for(store: StoreInterface, slug: str, iso_week: str):
+    """The stored macro row for `iso_week` (YYYY-Wnn), or None."""
+    macro = store.load_macro(slug)
+    year, week_no = iso_week.split("-W")
+    monday = date.fromisocalendar(int(year), int(week_no), 1)
+    return next((w for w in macro.weeks if w.week_start == monday), None) if macro else None
+
+
+def _cmd_progression(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Print the athlete's per-kind progression reads, the week's stimulus review and, when that
+    week has a plan, the advisory progression findings (`swim_coach.progression_check`)."""
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        return _error_from_exception(_error_label(store, slug, "profile.yaml"), exc)
+    as_of = date.fromisoformat(args.as_of) if args.as_of else athlete_today(athlete)
+    iso_week = args.week or iso_week_str(as_of)
+    weeks = [w for w in (store.load_week(slug, i) for i in store.list_week_ids(slug)) if w is not None]
+    week = next((w for w in weeks if w.iso_week == iso_week), None)
+    workouts, wellness = store.list_workouts(slug), store.list_wellness(slug)
+    out: dict = {"athlete": slug, "as_of": as_of.isoformat(), "week": iso_week, "review": None, "findings": []}
+    if week is None:
+        ledger = build_ledger(workouts, weeks, wellness, athlete, as_of=as_of)
+        reads = read_progression(ledger, as_of=as_of)
+    else:
+        inputs = build_progression_inputs(workouts, weeks, wellness, athlete, week, as_of=as_of)
+        reads = inputs.reads
+        out["review"] = inputs.review.model_dump(mode="json") if inputs.review else None
+        findings = check_week_progression(week, athlete, reads=reads, review=inputs.review, ledger=inputs.ledger,
+                                          macro_week=_macro_week_for(store, slug, iso_week))
+        out["findings"] = [f.model_dump(mode="json") for f in findings]
+    out["reads"] = [r.model_dump(mode="json") for r in reads]
+    print(json.dumps(out))
     return 0
 
 
@@ -1813,6 +1852,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check_macro.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
 
+    p_progression = subparsers.add_parser(
+        "progression", help="per-kind progression reads, week stimulus review and guardrail findings (advisory)"
+    )
+    p_progression.add_argument("--athlete", required=True)
+    p_progression.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
+    p_progression.add_argument("--week", help="ISO week YYYY-Wnn, default the week of --as-of")
+
     p_parse_coach_text = subparsers.add_parser(
         "parse-coach-text",
         help="save a pool-coach workout text verbatim and deterministically parse it",
@@ -2041,6 +2087,7 @@ _COMMANDS = {
     "summarize": _cmd_summarize,
     "adapt": _cmd_adapt,
     "check-macro": _cmd_check_macro,
+    "progression": _cmd_progression,
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,
