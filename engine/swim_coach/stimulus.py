@@ -18,7 +18,7 @@ endurance/long is all work. Library: library/48-stimulus-progression.md (Coach j
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal
 
 from pydantic import BaseModel
@@ -49,6 +49,15 @@ ESTIMATED_QUALITY_WORK_FRACTION = 0.5
 # Coach judgment (library/48): "short rep for the kind" targets, in the profile's dose unit.
 BIKE_REP_TARGET_S: dict[str, float] = {"tempo": 1200.0, "threshold": 600.0, "vo2": 240.0}
 SWIM_REP_TARGET_M: dict[str, float] = {"tempo": 400.0, "threshold": 200.0, "vo2": 100.0}
+
+# Coach judgment (library/48): the smallest quality dose that counts as a stimulus, per kind. Below it a
+# workout is read as endurance on its whole aerobic time instead of as a (tiny) quality record.
+BIKE_MIN_DOSE_S: dict[str, float] = {"tempo": 600.0, "threshold": 480.0, "vo2": 180.0}
+SWIM_MIN_DOSE_M: dict[str, float] = {"tempo": 400.0, "threshold": 300.0, "vo2": 200.0}
+# Coach judgment (library/48): practical units suggested doses are rounded to, per profile.
+BIKE_WORK_ROUND_S, BIKE_REP_ROUND_S = 30.0, 15.0
+SWIM_WORK_ROUND_M, SWIM_REP_ROUND_M = 50.0, 25.0
+ENDURANCE_KINDS = frozenset({"endurance", "long"})
 
 QUALITY_KINDS = frozenset({"tempo", "threshold", "vo2", "mixed"})
 NON_STIMULUS_KINDS = frozenset({"race", "opener", "warmup"})
@@ -95,6 +104,8 @@ class ExecutedStimulus(BaseModel):
     fade_pct: float | None = None
     rpe: int | None = None
     planned: bool
+    planned_kind: StimulusKind | None = None
+    substituted: bool = False  # delivered a different kind than the session planned
 
 
 @dataclass(frozen=True)
@@ -122,6 +133,10 @@ class ExecutedRead:
     in_band_pct: float | None = None
     fade_pct: float | None = None
     confidence: Literal["structured", "estimated"] = "structured"
+    reps: list[tuple[int | None, float | None, float | None]] = field(default_factory=list)  # (rank, s, m)
+    matches_plan: bool = False  # the analyzer located the planned reps, so the kind is the planned kind
+    total_s: float | None = None  # whole aerobic extent (moving time / total swum), for endurance kinds
+    total_m: float | None = None
 
 
 # --- zone ranks and the shared leaf walker -------------------------------------------------
@@ -231,6 +246,9 @@ class SportProfile:
     rep_targets: dict[str, float]
     leaf_work: Callable[[Leaf, Athlete], tuple[float | None, float | None]]
     read_executed: Callable[[Workout, Athlete, StimulusKind | None], ExecutedRead | None]
+    min_dose: dict[str, float] = field(default_factory=dict)
+    work_round: float = 1.0
+    rep_round: float = 1.0
 
     def extent(self, duration_min: float, distance_m: float | None) -> float | None:
         """A session's total size in this sport's dose unit."""
@@ -384,6 +402,15 @@ def _bike_effort_rank(effort, intervals: WorkoutIntervals, ftp: float | None) ->
     return zone_rank_of(intervals.target_zone)
 
 
+def _in_band_pct(intervals: WorkoutIntervals) -> float | None:
+    """The analyzer's reps-in-band share; unknown (None) when it reports 0 but resolved neither a
+    target zone nor a power band, since 0 then means "no band to measure against", not "all out"."""
+    pct = intervals.reps_in_band_pct
+    if pct == 0.0 and intervals.target_zone is None and intervals.target_band_w is None:
+        return None
+    return pct
+
+
 def _bike_intervals_read(intervals: WorkoutIntervals, athlete: Athlete) -> ExecutedRead:
     efforts = intervals.efforts
     ranks = [(_bike_effort_rank(e, intervals, athlete.ftp_watts), e.duration_s) for e in efforts]
@@ -399,8 +426,10 @@ def _bike_intervals_read(intervals: WorkoutIntervals, athlete: Athlete) -> Execu
         rep_count=intervals.reps_completed or len(efforts),
         longest_rep_s=max(e.duration_s for e in efforts),
         work_rest_ratio=(work / sum(gaps)) if gaps and sum(gaps) > 0 else None,
-        in_band_pct=intervals.reps_in_band_pct,
+        in_band_pct=_in_band_pct(intervals),
         fade_pct=intervals.fade_across_reps_pct,
+        reps=[(rank, seconds, None) for rank, seconds in ranks],
+        matches_plan=intervals.matched_to_prescription,
     )
 
 
@@ -420,15 +449,24 @@ def _bike_whole_read(workout: Workout, athlete: Athlete) -> ExecutedRead | None:
     return ExecutedRead(rank_weights=[(rank, seconds)], work_s=seconds, confidence="estimated")
 
 
+def _bike_moving_s(workout: Workout) -> float:
+    """Moving time of the ride: the free-ride read's `moving_s` when present, else the workout duration."""
+    a = workout.analytics
+    moving = a.free_ride.moving_s if a is not None and a.free_ride is not None else None
+    return float(moving) if moving else workout.duration_min * 60.0
+
+
 def _bike_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKind | None) -> ExecutedRead | None:
     a = workout.analytics
+    read: ExecutedRead | None = None
     if a is not None and a.intervals is not None and a.intervals.efforts:
-        return _bike_intervals_read(a.intervals, athlete)
-    if a is not None and a.free_ride is not None and a.free_ride.power_zones:
+        read = _bike_intervals_read(a.intervals, athlete)
+    elif a is not None and a.free_ride is not None and a.free_ride.power_zones:
         read = _bike_free_ride_read(a.free_ride.power_zones)
-        if read is not None:
-            return read
-    return _bike_whole_read(workout, athlete)
+    read = read or _bike_whole_read(workout, athlete)
+    if read is not None:
+        read.total_s = _bike_moving_s(workout)
+    return read
 
 
 def _swim_reps_m(workout: Workout, athlete: Athlete) -> list[tuple[float, float, float | None, float | None]]:
@@ -463,6 +501,7 @@ def _swim_sets_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKi
     in_band = (
         100.0 * sum(1 for i in keep if (ranks[i] or 0) >= target) / len(keep) if target and css else None
     )
+    total_m = float(workout.distance_m) if workout.distance_m else sum(d for d, _, _, _ in reps)
     return ExecutedRead(
         rank_weights=[(ranks[i], reps[i][0]) for i in keep],
         work_s=work_s,
@@ -473,6 +512,9 @@ def _swim_sets_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKi
         work_rest_ratio=(work_s / sum(rests)) if rests and sum(rests) > 0 else None,
         in_band_pct=in_band,
         fade_pct=_swim_fade_pct([p for _, _, p, _ in work]),
+        reps=[(ranks[i], reps[i][1], reps[i][0]) for i in keep],
+        total_s=workout.duration_min * 60.0,
+        total_m=total_m,
     )
 
 
@@ -487,6 +529,8 @@ def _swim_whole_read(workout: Workout, athlete: Athlete) -> ExecutedRead | None:
         work_s=workout.duration_min * 60.0,
         work_m=float(workout.distance_m),
         confidence="estimated",
+        total_s=workout.duration_min * 60.0,
+        total_m=float(workout.distance_m),
     )
 
 
@@ -495,29 +539,98 @@ def _swim_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKind | 
 
 
 PROFILES: tuple[SportProfile, ...] = (
-    SportProfile("bike", frozenset({"bike"}), "s", BIKE_LONG_MIN_WORK_S, BIKE_REP_TARGET_S, _bike_leaf_work, _bike_read),
     SportProfile(
-        "swim", frozenset({"swim_pool", "swim_ow"}), "m", SWIM_LONG_MIN_WORK_M, SWIM_REP_TARGET_M, _swim_leaf_work, _swim_read
+        "bike", frozenset({"bike"}), "s", BIKE_LONG_MIN_WORK_S, BIKE_REP_TARGET_S, _bike_leaf_work, _bike_read,
+        min_dose=BIKE_MIN_DOSE_S, work_round=BIKE_WORK_ROUND_S, rep_round=BIKE_REP_ROUND_S,
+    ),
+    SportProfile(
+        "swim", frozenset({"swim_pool", "swim_ow"}), "m", SWIM_LONG_MIN_WORK_M, SWIM_REP_TARGET_M, _swim_leaf_work,
+        _swim_read, min_dose=SWIM_MIN_DOSE_M, work_round=SWIM_WORK_ROUND_M, rep_round=SWIM_REP_ROUND_M,
     ),
 )
 
 
-def _apply_quality_filter(read: ExecutedRead, kind: StimulusKind, profile: SportProfile) -> None:
-    """For a quality kind, the dose is the work at Z3+ (see module docstring)."""
-    if kind not in QUALITY_KINDS:
-        return
-    hard = sum(w for r, w in read.rank_weights if r is not None and r >= min_work_rank(kind))
-    if hard <= 0:
-        return
+def _set_unit_work(read: ExecutedRead, profile: SportProfile, value: float) -> None:
     if profile.unit == "s":
-        read.work_s = hard
+        read.work_s = value
     else:
-        read.work_m = hard
+        read.work_m = value
 
 
-def _completion_pct(dose: StimulusDose, planned: StimulusDose | None, unit: Unit) -> float | None:
+def _narrow_to_quality(read: ExecutedRead, kind: StimulusKind, profile: SportProfile) -> None:
+    """For a quality kind the dose is the work at Z3+: total work, rep count and longest rep all
+    follow the same Z3+ filter, so the longest rep can never exceed the work."""
+    min_rank = min_work_rank(kind)
+    if read.reps:
+        hard = [r for r in read.reps if (r[0] or 0) >= min_rank]
+        if not hard:
+            return
+        read.work_s = sum(s for _, s, _ in hard if s is not None) or None
+        read.work_m = sum(m for _, _, m in hard if m is not None) or None
+        read.rep_count = len(hard)
+        read.longest_rep_s = max((s for _, s, _ in hard if s is not None), default=None)
+        read.longest_rep_m = max((m for _, _, m in hard if m is not None), default=None)
+        return
+    hard_work = sum(w for r, w in read.rank_weights if r is not None and r >= min_rank)
+    if hard_work > 0:
+        _set_unit_work(read, profile, hard_work)
+
+
+def _aerobic_kind(read: ExecutedRead, profile: SportProfile, recent_longest: float | None) -> StimulusKind | None:
+    """Re-read the workout as endurance or long on its whole aerobic extent (moving time, total swum
+    distance); detected efforts and rep subsets are irrelevant to that dose. None without an extent."""
+    extent = read.total_s if profile.unit == "s" else read.total_m
+    if not extent:
+        return None
+    read.work_s, read.work_m = read.total_s, read.total_m
+    read.rep_count = read.longest_rep_s = read.longest_rep_m = read.work_rest_ratio = None
+    return classify_kind([(1, extent)], extent, profile, recent_longest)
+
+
+def _quality_floor(kind: StimulusKind, profile: SportProfile) -> float | None:
+    if kind == "mixed":
+        return min(profile.min_dose.values(), default=None)
+    return profile.min_dose.get(kind)
+
+
+def _resolve_kind(
+    read: ExecutedRead, kind: StimulusKind, planned: StimulusDose | None, profile: SportProfile,
+    recent_longest: float | None,
+) -> StimulusKind | None:
+    """The kind this workout delivered. A workout whose reps the analyzer matched to the prescription
+    is the planned kind. A quality dose under the profile's floor is not a stimulus: the workout is
+    read as endurance instead, so one workout yields one primary record."""
+    if read.matches_plan and planned is not None:
+        kind = planned.kind
+    elif kind in QUALITY_KINDS:
+        _narrow_to_quality(read, kind, profile)
+        floor = _quality_floor(kind, profile)
+        work = read.work_s if profile.unit == "s" else read.work_m
+        if floor is not None and (work or 0.0) < floor:
+            return _aerobic_kind(read, profile, recent_longest)
+        return kind
+    if kind in ENDURANCE_KINDS:
+        return _aerobic_kind(read, profile, recent_longest) or kind
+    return kind
+
+
+def _same_family(a: StimulusKind | None, b: StimulusKind) -> bool:
+    return a == b or (a in ENDURANCE_KINDS and b in ENDURANCE_KINDS)
+
+
+def _completion_pct(dose: StimulusDose, planned: StimulusDose | None, unit: Unit, *, substituted: bool) -> float | None:
+    """Work done as a percent of the planned work; None for a substituted kind (nothing to compare)
+    or an estimated execution (its number is a guess, so a ratio against the plan is meaningless)."""
+    if substituted or dose.confidence == "estimated":
+        return None
     fraction = dose.fraction_of(planned, unit) if planned else None
     return None if fraction is None else fraction * 100.0
+
+
+def _is_non_stimulus(workout: Workout, session: Session | None) -> bool:
+    return workout.effective_kind in NON_STIMULUS_KINDS or (
+        session is not None and session.effective_kind in NON_STIMULUS_KINDS
+    )
 
 
 def executed_dose(
@@ -528,12 +641,14 @@ def executed_dose(
     recent_longest: float | None = None,
 ) -> ExecutedStimulus | None:
     """The dose a workout delivered plus quality (completion vs the matched session, in-band and
-    fade from the analyzer, RPE). The kind comes from the executed zones, falling back to the
-    planned kind. None for non-stimulus kinds, unsupported sports, or a workout with no readable
-    zone or session information. Bike reads intervals, then free-ride zone time, then average
-    power; swim reads swim sets, then whole-workout pace."""
+    fade from the analyzer, RPE). The kind comes from the executed zones (the planned kind when the
+    analyzer matched the prescription), falling back to the planned kind. When it differs from the
+    planned kind the result is `substituted`: no completion or in-band, `planned_kind` recorded.
+    None when the workout or its session is a race / opener / warm-up, for unsupported sports, or
+    with no readable zone or session information. Bike reads intervals, then free-ride zone time,
+    then average power; swim reads swim sets, then whole-workout pace."""
     profile = profile_for(workout.sport)
-    if profile is None or workout.effective_kind in NON_STIMULUS_KINDS:
+    if profile is None or _is_non_stimulus(workout, session):
         return None
     planned = planned_dose(session, athlete, recent_longest=recent_longest) if session else None
     read = profile.read_executed(workout, athlete, planned.kind if planned else None)
@@ -541,9 +656,9 @@ def executed_dose(
         return None
     total = sum(w for r, w in read.rank_weights if r is not None)
     kind = classify_kind(read.rank_weights, total, profile, recent_longest) or (planned.kind if planned else None)
+    kind = _resolve_kind(read, kind, planned, profile, recent_longest) if kind else None
     if kind is None:
         return None
-    _apply_quality_filter(read, kind, profile)
     dose = StimulusDose(
         sport=workout.sport,
         kind=kind,
@@ -555,11 +670,15 @@ def executed_dose(
         work_rest_ratio=read.work_rest_ratio,
         confidence=read.confidence,
     )
+    planned_kind = planned.kind if planned else None
+    substituted = planned_kind is not None and not _same_family(planned_kind, kind)
     return ExecutedStimulus(
         dose=dose,
-        completion_pct=_completion_pct(dose, planned, profile.unit),
-        in_band_pct=read.in_band_pct,
+        completion_pct=_completion_pct(dose, planned, profile.unit, substituted=substituted),
+        in_band_pct=None if substituted else read.in_band_pct,
         fade_pct=read.fade_pct,
         rpe=workout.rpe,
         planned=session is not None,
+        planned_kind=planned_kind,
+        substituted=substituted,
     )

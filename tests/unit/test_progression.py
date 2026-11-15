@@ -32,7 +32,7 @@ from swim_coach.progression import (
     read_progression,
     recovery_response,
 )
-from swim_coach.stimulus import ExecutedStimulus, StimulusDose
+from swim_coach.stimulus import ExecutedStimulus, StimulusDose, profile_for
 
 AID = uuid.uuid4()
 ATHLETE = Athlete(id=AID, slug="t", name="T", css_pace_s_per_100m=90.0, ftp_watts=250.0)
@@ -69,7 +69,8 @@ class TestSameScenariosBothSports:
         r = read_one([rec(sport)])
         s = SPORTS[sport]
         assert r.verdict == "progress" and r.unit == s["unit"]
-        assert r.suggested_work_range == pytest.approx((s["work"], s["work"] * (1 + PROGRESSION_STEP_FRACTION)))
+        unit = profile_for(sport).work_round
+        assert r.suggested_work_range == pytest.approx((s["work"], round(s["work"] * (1 + PROGRESSION_STEP_FRACTION) / unit) * unit))
         assert r.suggested_longest_rep_max is None and r.reference_dose is not None
 
     def test_progress_unplanned_but_clean(self, sport):
@@ -98,7 +99,8 @@ class TestSameScenariosBothSports:
     def test_stale_rebuilds_regardless_of_how_it_went(self, sport):
         r = read_one([rec(sport, days_ago=PROGRESSION_STALE_DAYS + 1)])
         assert r.verdict == "rebuild"
-        assert r.suggested_work_range[1] == pytest.approx(SPORTS[sport]["work"] * (1 - PROGRESSION_STEP_FRACTION))
+        unit = profile_for(sport).work_round
+        assert r.suggested_work_range[1] == pytest.approx(round(SPORTS[sport]["work"] * (1 - PROGRESSION_STEP_FRACTION) / unit) * unit)
 
     def test_estimated_only_is_insufficient(self, sport):
         r = read_one([rec(sport, confidence="estimated")])

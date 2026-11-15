@@ -16,10 +16,8 @@ from pydantic import BaseModel, Field
 
 from swim_coach.adapt import WELLNESS_RED_THRESHOLD
 from swim_coach.execution_score import FADE_FREE_PCT, INTENSITY_MATCH_MIN_IN_BAND_PCT
+from swim_coach.formatting import format_amount
 from swim_coach.load import (
-    estimate_hr_max,
-    estimate_hr_rest,
-    session_load,
     session_target_load_au,
     wellness_baseline_deviation,
     wellness_composite,
@@ -53,8 +51,9 @@ DUPLICATE_STIMULUS_FRACTION = 0.75  # unplanned work this share of a planned dos
 HARD_RECOVERY_WINDOW_H = 48.0  # hours a hard session needs after tempo/threshold/vo2/long work
 HARD_KINDS = frozenset({"tempo", "threshold", "vo2", "mixed"})
 HARD_OR_LONG_KINDS = HARD_KINDS | {"long"}
+COMPLETION_SANITY_MAX_PCT = 150.0  # structured completion above this draws a "check the match" reason
 
-Grade = Literal["clean", "marginal", "poor"]
+Grade = Literal["clean", "marginal", "poor", "unknown"]
 
 
 class RecoveryResponse(BaseModel):
@@ -139,11 +138,23 @@ class StimulusRecord(BaseModel):
         """True when the dose comes from measured analytics (not session totals) and has work."""
         return self.executed.dose.confidence == "structured" and self.executed.dose.work_in(unit) is not None
 
+    @property
+    def planned_kind(self) -> StimulusKind | None:
+        return self.executed.planned_kind
+
+    @property
+    def substituted(self) -> bool:
+        """True when the session planned one kind and the workout delivered another."""
+        return self.executed.substituted
+
     def grade(self) -> Grade:
-        """"poor" when completion < 75% or in-band < 50%; "clean" when completed (>= 90% of plan, or
-        unplanned), in band at the project's match threshold, fade within the free band, RPE under 9
-        and recovery not strained; otherwise "marginal"."""
+        """"unknown" for an estimated execution (its numbers are guesses); "poor" when completion <
+        75% or in-band < 50%; "clean" when completed (>= 90% of plan, or unplanned or substituted, which
+        have no completion), in band at the project's match threshold, fade within the free band, RPE
+        under 9 and recovery not strained; otherwise "marginal"."""
         e = self.executed
+        if e.dose.confidence == "estimated":
+            return "unknown"
         if (e.completion_pct is not None and e.completion_pct < COMPLETION_REDUCE_BELOW_PCT) or (
             e.in_band_pct is not None and e.in_band_pct < IN_BAND_REDUCE_BELOW_PCT
         ):
@@ -220,17 +231,36 @@ class ProgressionRead(BaseModel):
     reference_dose: StimulusDose | None = None
     suggested_work_range: tuple[float, float] | None = None
     suggested_longest_rep_max: float | None = None
+    verdict_reason: str | None = None  # the reason that decided the verdict
     days_since_last: int | None = None
     confidence: Literal["high", "medium", "low"]
 
 
-def _fmt(value: float | None, unit: Unit) -> str:
-    return "unknown" if value is None else (f"{value / 60:.0f} min" if unit == "s" else f"{value:.0f} m")
+def _round_to(value: float, step: float) -> float:
+    return round(value / step) * step
+
+
+def _practical_range(low: float, high: float, profile: SportProfile) -> tuple[float, float]:
+    """A work range rounded to the profile's practical unit, never with low above high."""
+    low_r, high_r = _round_to(low, profile.work_round), _round_to(high, profile.work_round)
+    return (min(low_r, high_r), high_r)
+
+
+def _practical_rep_cap(raw: float, longest: float, target: float, profile: SportProfile) -> float:
+    """A longest-rep cap rounded to the profile's rep unit, at least one unit above the current
+    longest rep (a cap that rounds back to the current rep is no progression) and never above `target`."""
+    step = profile.rep_round
+    cap = _round_to(raw, step)
+    if cap <= longest:
+        cap = _round_to(longest, step) + step
+    return min(cap, target)
 
 
 def _describe(record: StimulusRecord, unit: Unit) -> str:
     e = record.executed
-    parts = [f"did {_fmt(e.dose.work_in(unit), unit)} of {record.kind} on {record.date.isoformat()}"]
+    parts = [f"did {format_amount(e.dose.work_in(unit), unit)} of {record.kind} on {record.date.isoformat()}"]
+    if record.substituted:
+        parts.insert(0, f"planned {record.planned_kind}, delivered {record.kind}")
     if e.completion_pct is not None:
         parts.append(f"{e.completion_pct:.0f}% of planned work")
     if e.in_band_pct is not None:
@@ -243,8 +273,14 @@ def _describe(record: StimulusRecord, unit: Unit) -> str:
     return ", ".join(parts)
 
 
-def _range(base: float, low_factor: float, high_factor: float) -> tuple[float, float]:
-    return (base * low_factor, base * high_factor)
+def _range(base: float, low_factor: float, high_factor: float, profile: SportProfile) -> tuple[float, float]:
+    return _practical_range(base * low_factor, base * high_factor, profile)
+
+
+def _cause(base: ProgressionRead, text: str) -> None:
+    """Record the reason that decided the verdict (also the most informative one for a finding)."""
+    base.reasons.append(text)
+    base.verdict_reason = text
 
 
 def _confidence(usable: int, recovery: str, stale: bool) -> Literal["high", "medium", "low"]:
@@ -267,15 +303,15 @@ def _progress_read(
     step = PROGRESSION_STEP_FRACTION
     if target is not None:
         longest = last.executed.dose.longest_rep_in(profile.unit)
-        base.suggested_work_range = _range(work, 1.0, 1.0)
-        base.suggested_longest_rep_max = min(longest * (1 + step), target)
-        base.reasons.append(
-            f"Longest rep was {_fmt(longest, profile.unit)}, short for {last.kind} (target {_fmt(target, profile.unit)}); "
-            f"lengthen reps up to {_fmt(base.suggested_longest_rep_max, profile.unit)} before adding total work."
+        base.suggested_work_range = _range(work, 1.0, 1.0, profile)
+        base.suggested_longest_rep_max = _practical_rep_cap(longest * (1 + step), longest, target, profile)
+        _cause(base,
+            f"Longest rep was {format_amount(longest, profile.unit)}, short for {last.kind} (target {format_amount(target, profile.unit)}); "
+            f"lengthen reps up to {format_amount(base.suggested_longest_rep_max, profile.unit)} before adding total work."
         )
     else:
-        base.suggested_work_range = _range(work, 1.0, 1 + step)
-        base.reasons.append(f"Next dose {_fmt(base.suggested_work_range[0], profile.unit)} to {_fmt(base.suggested_work_range[1], profile.unit)} (+{step:.0%} step).")
+        base.suggested_work_range = _range(work, 1.0, 1 + step, profile)
+        _cause(base, f"Next dose {format_amount(base.suggested_work_range[0], profile.unit)} to {format_amount(base.suggested_work_range[1], profile.unit)} (+{step:.0%} step).")
     return base
 
 
@@ -290,16 +326,21 @@ def _decide(
     step, tol = PROGRESSION_STEP_FRACTION, REPEAT_TOLERANCE_FRACTION
     grades = [r.grade() for r in usable[-CONSECUTIVE_REPEATS_TO_REDUCE:]]
     base.reasons.append(f"Last session {_describe(last, unit)}.")
+    completion = last.executed.completion_pct
+    if completion is not None and completion > COMPLETION_SANITY_MAX_PCT:
+        base.reasons.append(
+            f"Completion {completion:.0f}% is over {COMPLETION_SANITY_MAX_PCT:.0f}% of the planned work; check the session match before trusting this dose."
+        )
     if base.days_since_last > PROGRESSION_STALE_DAYS:
         ref = (clean.executed.dose.work_in(unit) if clean else None) or work
-        base.verdict, base.suggested_work_range = "rebuild", _range(ref * (1 - step), 1 - tol, 1.0)
-        base.reasons.append(f"{base.days_since_last} days since this kind was trained (over {PROGRESSION_STALE_DAYS}); step back {step:.0%} from the last reference dose.")
+        base.verdict, base.suggested_work_range = "rebuild", _range(ref * (1 - step), 1 - tol, 1.0, profile)
+        _cause(base, f"{base.days_since_last} days since this kind was trained (over {PROGRESSION_STALE_DAYS}); step back {step:.0%} from the last reference dose.")
     elif grades[-1] == "poor" or grades == ["marginal"] * CONSECUTIVE_REPEATS_TO_REDUCE:
-        base.verdict, base.suggested_work_range = "reduce", _range(work * (1 - step), 1 - tol, 1.0)
-        base.reasons.append("Completion or in-band was too low." if grades[-1] == "poor" else f"{CONSECUTIVE_REPEATS_TO_REDUCE} marginal sessions in a row.")
+        base.verdict, base.suggested_work_range = "reduce", _range(work * (1 - step), 1 - tol, 1.0, profile)
+        _cause(base, "Completion or in-band was too low." if grades[-1] == "poor" else f"{CONSECUTIVE_REPEATS_TO_REDUCE} marginal sessions in a row.")
     elif grades[-1] == "marginal":
-        base.verdict, base.suggested_work_range = "repeat", _range(work, 1 - tol, 1.0)
-        base.reasons.append("Completed but marginal on completion, in-band, fade, RPE or recovery; repeat the dose.")
+        base.verdict, base.suggested_work_range = "repeat", _range(work, 1 - tol, 1.0, profile)
+        _cause(base, "Completed but marginal on completion, in-band, fade, RPE or recovery; repeat the dose.")
     else:
         base.verdict = "progress"
         _progress_read(base, last, profile, work)
@@ -316,7 +357,7 @@ def _read_group(
     base = ProgressionRead(sport=sport, kind=kind, verdict="insufficient_data", unit=unit, reasons=[], confidence="low")
     if not usable:
         base.last = records[-1] if records else None
-        base.reasons.append(f"No usable executed {kind} data ({len(records)} estimated-only record(s)).")
+        base.reasons.append(f"No usable executed {kind} data ({len(records)} estimated-only record(s)): insufficient execution data to read progression.")
         return base
     _decide(base, usable, profile, as_of)
     stale = base.verdict == "rebuild"
@@ -363,7 +404,8 @@ class UnplannedWork(BaseModel):
     sport: str
     kind: StimulusKind | None = None
     executed: ExecutedStimulus | None = None
-    load_au: float
+    load_au: float | None = None  # planned-scale load (minutes x RPE); None when it cannot be priced
+    planned_kind: StimulusKind | None = None  # set for a substituted session: what was planned
 
 
 class RemainingImpact(BaseModel):
@@ -386,22 +428,32 @@ class WeekStimulusReview(BaseModel):
     planned_missed: list[SessionStimulus] = Field(default_factory=list)
     remaining: list[SessionStimulus] = Field(default_factory=list)
     unplanned_done: list[UnplannedWork] = Field(default_factory=list)
+    substituted_done: list[UnplannedWork] = Field(default_factory=list)  # planned one kind, delivered another
     impacts: list[RemainingImpact] = Field(default_factory=list)
+    load_comparable: bool = True  # every done workout could be priced on the planned scale
     planned_load_au: float = 0.0
     done_load_au: float = 0.0
     remaining_load_au: float = 0.0
 
 
-def _workout_load(workout: Workout, athlete: Athlete, hr_max: float | None, wellness: list[Wellness]) -> float:
-    return session_load(
-        workout,
-        hr_max=hr_max,
-        hr_rest=estimate_hr_rest(wellness, workout.date),
-        sex=athlete.sex,
-        css_pace_s_per_100m=athlete.css_pace_s_per_100m,
-        lthr_bpm=athlete.lthr_bpm,
-        ftp_watts=athlete.ftp_watts,
-    ).value
+def _planned_scale_load(workout: Workout, session: Session | None, athlete: Athlete) -> float | None:
+    """A done workout's load on the planned-session scale (`session_target_load_au`: minutes x RPE).
+    `load.session_load` is a different scale for measured tiers (power TSS, HR TRIMP are about one
+    hour at threshold = 100), so it is never compared with a planned target. Priced as the athlete's
+    own sRPE when rated, else as the matched session's target (the session done as planned); None when
+    neither exists."""
+    if workout.rpe:
+        return workout.duration_min * workout.rpe
+    return session_target_load_au(session, athlete) if session is not None else None
+
+
+def _source_subject(u: UnplannedWork) -> str:
+    """Who delivered the work: an unplanned workout, or a planned session that delivered another kind."""
+    unit = _unit_of(u.sport)
+    delivered = f"delivered {format_amount(u.executed.dose.work_in(unit), unit)} of {u.executed.dose.kind}"
+    if u.planned_kind is None:
+        return f"unplanned {u.sport} on {u.date.isoformat()} {delivered}"
+    return f"{u.date.strftime('%A')}'s planned {u.planned_kind} {u.sport} session {delivered}"
 
 
 def _unit_of(sport: str) -> Unit | None:
@@ -420,8 +472,8 @@ def _duplicate_impact(remaining: SessionStimulus, unplanned: list[UnplannedWork]
         fraction = u.executed.dose.fraction_of(dose, unit)
         if fraction is not None and fraction >= DUPLICATE_STIMULUS_FRACTION:
             evidence.append(
-                f"Unplanned {u.sport} on {u.date.isoformat()} already delivered {dose.kind} at {fraction:.0%} of this "
-                f"session's planned dose ({_fmt(u.executed.dose.work_in(unit), unit)} vs {_fmt(dose.work_in(unit), unit)}); "
+                f"{_source_subject(u).capitalize()}, already {fraction:.0%} of this session's planned {dose.kind} dose "
+                f"({format_amount(u.executed.dose.work_in(unit), unit)} vs {format_amount(dose.work_in(unit), unit)}); "
                 f"the duplicate threshold is {DUPLICATE_STIMULUS_FRACTION:.0%}."
             )
     return _impact(remaining, "duplicate_stimulus", evidence)
@@ -431,8 +483,8 @@ def _hard_too_soon_impact(remaining: SessionStimulus, unplanned: list[UnplannedW
     if remaining.kind not in HARD_KINDS:
         return None
     evidence = [
-        f"{remaining.kind} session on {remaining.date.isoformat()} is {(remaining.date - u.date).days * 24:.0f} h after an "
-        f"unplanned {u.executed.dose.kind} {u.sport} workout on {u.date.isoformat()} (under {HARD_RECOVERY_WINDOW_H:.0f} h)."
+        f"{remaining.kind} session on {remaining.date.isoformat()} is {(remaining.date - u.date).days * 24:.0f} h after "
+        f"{_source_subject(u)} (under {HARD_RECOVERY_WINDOW_H:.0f} h)."
         for u in unplanned
         if u.executed is not None
         and u.executed.dose.kind in HARD_OR_LONG_KINDS
@@ -451,7 +503,7 @@ def _impact(remaining: SessionStimulus, impact: ImpactType, evidence: list[str])
 def _load_over_target_impact(review: WeekStimulusReview) -> RemainingImpact | None:
     projected = review.done_load_au + review.remaining_load_au
     limit = review.planned_load_au * (1 + WEEKLY_VOLUME_RAMP_CAP)
-    if review.planned_load_au <= 0 or not review.remaining or projected <= limit:
+    if not review.load_comparable or review.planned_load_au <= 0 or not review.remaining or projected <= limit:
         return None
     heaviest = max(review.remaining, key=lambda r: r.load_au or 0.0)
     return _impact(heaviest, "load_over_target", [
@@ -488,24 +540,31 @@ def week_stimulus_review(
     done = [w for w in workouts if start <= w.date <= min(as_of, start + timedelta(days=6))]
     sessions = [s for s in week_plan.sessions if s.status != "replaced"]
     matches = _match_week(done, sessions)
-    hr_max = estimate_hr_max(workouts)
-    loads = {w.id: _workout_load(w, athlete, hr_max, wellness) for w in done}
-    review = WeekStimulusReview(week_start=start, as_of=as_of, done_load_au=sum(loads.values()))
-    matched_ids = {s.id for s in matches.values() if s is not None}
+    review = WeekStimulusReview(week_start=start, as_of=as_of)
+    done_ids: set[UUID] = set()
+    substituted_ids: set[UUID] = set()
     for w in done:
         session = matches[w.id]
         executed = executed_dose(w, athlete, session)
-        if session is None:
-            review.unplanned_done.append(UnplannedWork(
-                workout_id=w.id, date=w.date, sport=w.sport, kind=executed.dose.kind if executed else None,
-                executed=executed, load_au=loads[w.id]))
+        swapped = executed is not None and executed.substituted
+        load = _planned_scale_load(w, None if swapped else session, athlete)
+        review.load_comparable &= load is not None
+        review.done_load_au += load or 0.0
+        if session is None or swapped:
+            work = UnplannedWork(workout_id=w.id, date=w.date, sport=w.sport, kind=executed.dose.kind if executed else None,
+                                 executed=executed, load_au=load, planned_kind=executed.planned_kind if swapped else None)
+            (review.substituted_done if swapped else review.unplanned_done).append(work)
+            if swapped:
+                substituted_ids.add(session.id)
         else:
-            review.planned_done.append(_session_entry(session, athlete, executed, loads[w.id]))
+            review.planned_done.append(_session_entry(session, athlete, executed, load))
+        if session is not None and not swapped:
+            done_ids.add(session.id)
     for session in sessions:
-        if session.id in matched_ids:
+        if session.id in done_ids:
             continue
         entry = _session_entry(session, athlete, None, session_target_load_au(session, athlete))
-        if session.date < as_of or session.status == "skipped":
+        if session.id in substituted_ids or session.date < as_of or session.status == "skipped":
             review.planned_missed.append(entry)
         else:
             review.remaining.append(entry)
@@ -517,8 +576,9 @@ def week_stimulus_review(
 
 def _impacts(review: WeekStimulusReview) -> list[RemainingImpact]:
     found: list[RemainingImpact | None] = []
+    sources = review.unplanned_done + review.substituted_done
     for remaining in review.remaining:
-        found.append(_duplicate_impact(remaining, review.unplanned_done))
-        found.append(_hard_too_soon_impact(remaining, review.unplanned_done))
+        found.append(_duplicate_impact(remaining, sources))
+        found.append(_hard_too_soon_impact(remaining, sources))
     found.append(_load_over_target_impact(review))
     return [i for i in found if i is not None]
