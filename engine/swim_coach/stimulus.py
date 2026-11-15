@@ -647,7 +647,7 @@ def _aerobic_kind(read: ExecutedRead, profile: SportProfile, recent_longest: flo
 
 def _quality_floor(kind: StimulusKind, profile: SportProfile) -> float | None:
     if kind == "mixed":
-        return min(profile.min_dose.values(), default=None)
+        return max(profile.min_dose.values(), default=None)
     return profile.min_dose.get(kind)
 
 

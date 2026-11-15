@@ -54,6 +54,11 @@ REST_TOLERANCE_S = 5.0
 # Coach judgment (library/48): derived sizes snap to this grid so a rung reads cleanly.
 SNAP_SHORT_S, SNAP_LONG_S, SNAP_LONG_FROM_S, SNAP_M = 5.0, 30.0, 120.0, 25.0
 MAX_EXPANDED_STEPS = 600
+# Coach judgment (library/48): executed efforts with no more than this gap between them are one rep.
+MERGE_GAP_S = 1.0
+# Coach judgment (library/48): the block of equal reps must carry this share of all the quality work;
+# the rest are primers or extras, ignored for the shape.
+DOMINANT_MIN_SHARE = 0.75
 CEILING_TOLERANCE = 0.005
 GRID_STEPS_MAX = 60
 
@@ -199,30 +204,46 @@ class SessionShape(BaseModel):
     def from_structure(
         cls, structure: WorkoutStructure, athlete: Athlete, sport: str | None = None
     ) -> "SessionShape | None":
-        """The shape of a planned structure, or None when its work is not one regular rung. `sport` (a
-        session sport or sport group) defaults to the steps' own modality."""
-        steps = _expand(structure.items)
-        if steps is None:
-            return None
-        profile = _profile_of(sport, steps)
-        if profile is None:
-            return None
-        zones = {r for r in (_rank(s, athlete) for s in steps if s.role in WORK_ROLES) if r is not None and r >= 3}
-        if len(zones) != 1:
-            return None
-        sizes, gaps = _structure_reps(steps, athlete, profile)
-        return None if sizes is None else _shape_from_reps(profile.name, f"Z{min(zones.pop(), 5)}", sizes, gaps)
+        """The dominant regular block of a planned structure (see `shape_from_structure`), else None."""
+        return shape_from_structure(structure, athlete, sport)[0]
 
     @classmethod
     def from_executed(cls, record: "StimulusRecord") -> "SessionShape | None":
-        """The shape of an executed quality session, or None when its rep sizes or rests are missing or
-        irregular. The zone is the record's kind (tempo Z3, threshold Z4, vo2 Z5)."""
-        dose, rank = record.executed.dose, KIND_RANK.get(record.kind)
-        profile = profile_for(record.sport)
-        if rank is None or profile is None or not dose.rep_sizes or (len(dose.rep_sizes) > 1 and dose.rest_gaps_s is None):
-            return None
-        group_zone = (profile.name, f"Z{rank}")
-        return _shape_from_reps(*group_zone, dose.rep_sizes, dose.rest_gaps_s or [])
+        """The dominant regular block of an executed quality session (see `shape_from_executed`), else None."""
+        return shape_from_executed(record)[0]
+
+
+def shape_from_structure(
+    structure: WorkoutStructure, athlete: Athlete, sport: str | None = None
+) -> "tuple[SessionShape | None, str | None]":
+    """(shape, note) of a planned structure: the dominant block of reps (see `_dominant`), where work
+    steps with no rest between them form one rep. `sport` (a session sport or sport group) defaults to
+    the steps' own modality. The note says how many other reps were ignored."""
+    steps = _expand(structure.items)
+    profile = _profile_of(sport, steps) if steps else None
+    if profile is None:
+        return None, None
+    reps, gaps = _structure_reps(steps, athlete, profile)
+    return _dominant(profile.name, reps, gaps)
+
+
+def shape_from_executed(record: "StimulusRecord") -> "tuple[SessionShape | None, str | None]":
+    """(shape, note) of an executed quality session from its per-rep detail; efforts with no gap between
+    them are one rep. The zone is the record's kind (tempo Z3, threshold Z4, vo2 Z5)."""
+    dose, rank = record.executed.dose, KIND_RANK.get(record.kind)
+    profile = profile_for(record.sport)
+    if rank is None or profile is None or not dose.rep_sizes or (len(dose.rep_sizes) > 1 and dose.rest_gaps_s is None):
+        return None, None
+    reps: list[tuple[float, int]] = []
+    gaps: list[float] = []
+    for index, size in enumerate(dose.rep_sizes):
+        before = dose.rest_gaps_s[index - 1] if index else None
+        if index and before is not None and before <= MERGE_GAP_S:
+            reps[-1] = (reps[-1][0] + size, rank)
+        else:
+            gaps.extend([before] if index else [])
+            reps.append((size, rank))
+    return _dominant(profile.name, reps, gaps)
 
 
 def _rank(step: Any, athlete: Athlete) -> int | None:
@@ -243,25 +264,71 @@ def _expand(items: list, budget: list[int] | None = None) -> list | None:
     return out
 
 
-def _structure_reps(steps: list, athlete: Athlete, profile: SportProfile) -> tuple[list[float] | None, list[float]]:
-    """(work rep sizes, rest seconds between them) of the steps at zone 3 and above; sizes None when
-    something other than rest sits between two reps."""
-    sizes: list[float] = []
+def _structure_reps(steps: list, athlete: Athlete, profile: SportProfile) -> tuple[list[tuple[float, int]], list[float]]:
+    """(reps as (size, zone rank), rest seconds between them) of the work at zone 3 and above. Work steps
+    with nothing between them merge into one rep, whose zone is the one carrying most of its time."""
+    reps: list[tuple[float, dict[int, float]]] = []
     gaps: list[float] = []
-    pending = 0.0
+    pending, adjacent = 0.0, False
     for step in steps:
-        if step.role in WORK_ROLES and (_rank(step, athlete) or 0) >= 3:
-            value = _step_value(step, athlete, profile)
-            if value is None:
-                return None, []
-            gaps.extend([pending] if sizes else [])
-            sizes.append(value)
-            pending = 0.0
-        elif sizes and (step.role in REST_ROLES or step.role in WORK_ROLES):
-            pending += _step_seconds(step, athlete, profile) or 0.0
-        elif sizes and step.role not in ("warmup", "cooldown"):
-            return None, []
-    return (sizes, gaps) if sizes else (None, [])
+        rank = min(_rank(step, athlete) or 0, 5)
+        value = _step_value(step, athlete, profile) if step.role in WORK_ROLES and rank >= 3 else None
+        if value is not None:
+            if not adjacent:
+                gaps.extend([pending] if reps else [])
+                reps.append((0.0, {}))
+            size, by_rank = reps[-1]
+            by_rank[rank] = by_rank.get(rank, 0.0) + (_step_seconds(step, athlete, profile) or value)
+            reps[-1] = (size + value, by_rank)
+            pending, adjacent = 0.0, True
+        elif step.role in REST_ROLES or step.role in WORK_ROLES:
+            pending, adjacent = pending + (_step_seconds(step, athlete, profile) or 0.0), False
+        else:
+            adjacent = False
+    return [(size, max(by, key=lambda r: (by[r], r))) for size, by in reps], gaps
+
+
+def _clusters(reps: Sequence[tuple[float, int]]) -> list[list[int]]:
+    """Indices of reps grouped by zone and size (within `REP_REGULARITY` of the group's smallest)."""
+    order = sorted(range(len(reps)), key=lambda i: (reps[i][1], reps[i][0]))
+    groups: list[list[int]] = []
+    for i in order:
+        first = groups[-1][0] if groups else None
+        if first is not None and reps[first][1] == reps[i][1] and _equal(reps[i][0], reps[first][0], REP_REGULARITY):
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    return [sorted(g) for g in groups]
+
+
+def _is_shape_sized(group: str, zone: int, indices: list[int], reps: Sequence[tuple[float, int]]) -> bool:
+    """A block needs two reps, or one rep at least as long as the zone's entry rep."""
+    if len(indices) >= 2:
+        return True
+    policy = default_policy()
+    if not policy.has_zone(group, f"Z{zone}"):
+        return True
+    return reps[indices[0]][0] >= policy.entry(group, f"Z{zone}").rep_size
+
+
+def _dominant(
+    group: str, reps: Sequence[tuple[float, int]], gaps: Sequence[float]
+) -> "tuple[SessionShape | None, str | None]":
+    """The regular shape of the block of equal reps carrying the most work, with a note on the reps
+    ignored (primers, extras). None when no block carries `DOMINANT_MIN_SHARE` of all the work, is
+    contiguous, is big enough, or is regular."""
+    if not reps or len(gaps) != len(reps) - 1 or any(g is None or g < 0 for g in gaps):
+        return None, None
+    best = max(_clusters(reps), key=lambda c: (sum(reps[i][0] for i in c), -c[0]))
+    zone = reps[best[0]][1]
+    if sum(reps[i][0] for i in best) < DOMINANT_MIN_SHARE * sum(size for size, _ in reps):
+        return None, None
+    if best != list(range(best[0], best[-1] + 1)) or not 3 <= zone <= 5 or not _is_shape_sized(group, zone, best, reps):
+        return None, None
+    shape = _shape_from_reps(group, f"Z{zone}", [reps[i][0] for i in best], gaps[best[0]:best[-1]])
+    ignored = len(reps) - len(best)
+    note = f"ignored {ignored} primer rep{'s' if ignored != 1 else ''}" if ignored else None
+    return (shape, note) if shape else (None, None)
 
 
 def _profile_of(sport: str | None, steps: list) -> SportProfile | None:
