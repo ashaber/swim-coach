@@ -49,27 +49,14 @@ effort" means >= 80% of it — 195W against a 239W target is still an
 attempt). All engineering defaults tuned so the scan ignores steady
 endurance riding but catches a threshold interval; none is a cited value.
 
-**Coach judgment:** `EFFORT_MIN_S_TOLERANCE_S = 5.0` — a small ramp-up/
-settle-out grace period ON `EFFORT_MIN_S`: a candidate span only needs to
-reach `EFFORT_MIN_S - EFFORT_MIN_S_TOLERANCE_S` to be checked as a
-sustained effort, not the raw floor. Real efforts ramp up to power and
-settle back down at their boundary rather than starting/stopping
-instantaneously, so a genuinely-executed ~`EFFORT_MIN_S` prescribed effort's
-measured above-threshold span routinely lands a few seconds short of the
-nominal duration. Confirmed on real data: Andrew's 2026-09-12 ride
-(prescribed 5x2min VO2 set, target 309.1W — 110-114% of 276W FTP) had two of
-its five genuinely in-band reps (101-103% of target) measure 118.00s and
-119.00s — both silently dropped by the un-tolerant floor despite being real,
-well-executed efforts, not noise. 5s is deliberately not fit to that one
-example's exact 1-2s gap: it allows for lag at both the rising and falling
-edge of one effort (a plausible ~2-3s apiece from ramp-up/settle-out), while
-staying nowhere near the ~30-60s spans this module's noise-rejection tests
-exercise (a single short surge, a handful of scattered short reps) — those
-stay well under the tolerance-adjusted floor, so a few seconds of grace
-narrows the floor without reopening that class of false positive. No
-published source pins this number — ramp-lag tolerance isn't independently
-studied literature, this is an engineering read of one real example, same
-spirit as this section's other engineering defaults above.
+**Coach judgment:** `EFFORT_MIN_S_TOLERANCE_S = 5.0` — a ramp-up/settle-out
+grace on `EFFORT_MIN_S`: a candidate span only needs `EFFORT_MIN_S - 5 s` to
+be checked as a sustained effort, because real efforts ramp at their edges.
+Confirmed on Andrew's 2026-09-12 5x2min VO2 ride (target 309.1W): two genuinely
+in-band reps measured 118.00s and 119.00s and were silently dropped by the raw
+floor. 5s allows ~2-3s of lag per edge yet stays far under the ~30-60s spans the
+noise-rejection tests use. No published source pins it; an engineering read of
+one real example.
 
 ### Interval quality vs. target
 
@@ -185,20 +172,12 @@ durations.
 
 ### Non-effort false-positive filter (`SUSTAINED_EFFORT_GATE_FRAC`)
 
-The same validation pass found that, with a target supplied, a warm-up ramp
-from 138→248W into a 263W target registered as an "effort" flagged "under
-target 76%" — a false failure — because `detect_efforts` opened a span on
-*any* sample ≥ `target × TARGET_GATE_FRAC`. **Coach judgment:**
-`SUSTAINED_EFFORT_GATE_FRAC = 0.80` — a ≥ `EFFORT_MIN_S` candidate only
-survives if its own *mean* power (not just momentary crossings) reaches
-0.80 of the target. Same height as the instantaneous entry bar by design:
-"195W against a 239W target is still an attempt" applies to the sustained
-level too, not one lucky sample. In dynamic (no-target) mode the equivalent
-gate is "span mean ≥ the ride's own 40th-percentile working power", which
-kills a mid-ride lull that only crested the detection threshold on a couple
-of bridged spikes. Verified against the real files: the 2×12 and
-Chamberlin-4 sustained blocks still detect; the warm-up/cool-down ramps no
-longer do.
+With a target supplied, a warm-up ramp from 138→248W into a 263W target registered as an
+"effort" flagged "under target 76%" — a false failure. **Coach judgment:**
+`SUSTAINED_EFFORT_GATE_FRAC = 0.80` — a ≥ `EFFORT_MIN_S` candidate only survives if its own *mean*
+power reaches 0.80 of the target (same height as the entry bar). In dynamic (no-target) mode the
+gate is "span mean ≥ the ride's own 40th-percentile working power". Verified on the real files:
+the 2×12 and Chamberlin-4 blocks still detect; the warm-up/cool-down ramps no longer do.
 
 ### Over/under sub-resolution (coach judgment)
 
@@ -265,6 +244,21 @@ the ride's own surface roughness:
   `INDOOR_ROUGHNESS_MAX` keeps the tight floor; a caller that knows the FIT
   `sub_sport`/`trainer` flag can force it via `analyze(..., indoor=...)`.
   The multiplier is a fitted constant, not cited.
+
+### ERG ramp trim and graded rep rating (coach judgment, UNREVIEWED)
+
+**Coach judgment:** `ERG_RAMP_TRIM_S = 5` — an indoor prescribed rep of at least 2x that is scored on
+its steady part (`avg_w`); the whole-rep average stays as `raw_avg_w`. Indoor only: outdoors the
+opening seconds are the rider's own. Evidence, 2026-11-07, ERG, 3x8x40s/20s: the trainer ramps ~5 s
+into a step and ~4 s out of one (`129,130,153,206,206,284,329,334,311,301`), so seconds 5-40 held
+313-316 W but whole laps read 293-301 W (0 of 24 "in band"). **Test:** trimmed average within ~1% of
+the ERG target.
+
+**Coach judgment:** each completed rep is also classed `in_band`, `below_band_in_zone`,
+`dropped_zone` or `above_band` by the Coggan/Allen zone (`23-cycling-training.md`) its average
+landed in; at FTP 278, 90% of 327.5 W is 106% FTP, still Z5. The execution score credits
+`below_band_in_zone` at `BELOW_BAND_IN_ZONE_CREDIT = 0.7`, a judgment call. **Test:** a session
+~4% under band scores ~70 on intensity; one ridden a zone down, 0.
 
 ### Mean-maximal power curve (`power_curve.py`; practitioner convention)
 

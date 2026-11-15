@@ -126,6 +126,10 @@ def _holds_intervals(items: list) -> bool:
     return False
 
 
+def _has_inner_interval_repeat(items: list) -> bool:
+    return any(getattr(i, "kind", None) == "repeat" and _holds_intervals(i.steps) for i in items)
+
+
 def flatten_prescription(
     structure: WorkoutStructure, *, ftp_watts: float | None
 ) -> list[PrescribedLeaf]:
@@ -162,6 +166,14 @@ def flatten_prescription(
             if isinstance(item, WorkoutRepeat) or getattr(item, "kind", None) == "repeat":
                 if item.repeat_mode != "count":
                     state["ok"] = False
+                    continue
+                if round_n is None and _holds_intervals(item.steps) and not _has_inner_interval_repeat(item.steps):
+                    # A flat rep set ("8 x 40s/20s"): the whole repeat is one round, its
+                    # iterations are the reps -- not eight single-rep rounds.
+                    state["round"] += 1
+                    state["rep"] = 0
+                    for _ in range(item.count or 1):
+                        visit(item.steps, state["round"])
                     continue
                 for _ in range(item.count or 1):
                     if round_n is None and _holds_intervals(item.steps):

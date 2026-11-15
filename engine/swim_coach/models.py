@@ -1774,6 +1774,19 @@ class IntervalEffort(BaseModel):
     round_n: int | None = None
     rep_in_round: int | None = None
     in_target_band: bool | None = None
+    # ERG ramp trim (indoor prescription-matched reps only): when `ramp_trim_s` is set, `avg_w`
+    # (and every power quality field) is the STEADY average with the first `ramp_trim_s` seconds
+    # of the rep dropped -- the trainer is still ramping to the step target there -- and
+    # `raw_avg_w` is the whole-rep average, kept so nothing is hidden. `ramp_trim_s` is `None`
+    # (and `avg_w` is the whole-rep average) for outdoor reps, reps too short to trim, and every
+    # row stored before this existed. Additive/optional, no schema_version bump.
+    raw_avg_w: float | None = None
+    ramp_trim_s: float | None = None
+    # Graded rating of a completed work rep against the band and the athlete's power zones
+    # (`swim_coach.rep_rating`): in_band | below_band_in_zone | dropped_zone | above_band, and
+    # the zone `avg_w` landed in. `None` without a resolvable band/FTP. Additive/optional.
+    rep_class: Literal["in_band", "below_band_in_zone", "dropped_zone", "above_band"] | None = None
+    landed_zone: str | None = None
     # Technical-course reps (`interval_analysis.is_technical_rep`): power is not a fair
     # read of effort on a tight course, so the rep is scored on HR. Additive/optional.
     technical: bool | None = None
@@ -1795,6 +1808,10 @@ class IntervalRound(BaseModel):
     avg_w: float | None = None  # mean of the completed reps' average power
     avg_hr: int | None = None
     reps_in_band: int | None = None  # None when no watts band was resolvable
+    # Graded rep counts for the round (`swim_coach.rep_rating`); None when the reps were not rated.
+    reps_below_band_in_zone: int | None = None
+    reps_dropped_zone: int | None = None
+    reps_above_band: int | None = None
     fade_within_pct: float | None = None  # first-half vs second-half rep power, % drop
 
 
@@ -1949,6 +1966,21 @@ class RaceLap(BaseModel):
     avg_hr: int | None = None
 
 
+class RepRatingSummary(BaseModel):
+    """Session-level graded rating of the completed work reps (`swim_coach.rep_rating`), beside
+    -- never instead of -- `WorkoutIntervals.reps_in_band_pct`. `summary` is the plain-English
+    line the coach and the PWA show. Additive/optional on `WorkoutIntervals`."""
+
+    rated: int
+    in_band: int = 0
+    below_band_in_zone: int = 0  # under the band but still in the prescribed zone
+    dropped_zone: int = 0  # fell into a lower zone (a different stimulus)
+    above_band: int = 0
+    held_zone_pct: float  # (rated - dropped_zone) / rated * 100
+    prescribed_zone: str | None = None
+    summary: str
+
+
 class WorkoutIntervals(BaseModel):
     """The compact interval block on `WorkoutAnalytics` -- deterministic
     output of `swim_coach.interval_analysis.analyze`, computed inside
@@ -2014,6 +2046,7 @@ class WorkoutIntervals(BaseModel):
     detection_source: Literal["laps", "series", "lap_shape"] | None = None
     reps_completed: int | None = None
     reps_in_band_pct: float | None = None  # % of completed reps whose avg sat in the band
+    rep_ratings: RepRatingSummary | None = None  # graded zone rating alongside the in-band call
     fade_across_reps_pct: float | None = None  # first-third vs last-third rep power, % drop
     fade_across_rounds_pct: float | None = None  # first round vs last round mean power, % drop
     target_zone: str | None = None
@@ -2864,7 +2897,7 @@ class WorkoutQuality(BaseModel):
     # mechanism (see `quality.workout_quality`'s docstring and
     # `cli.py`'s `validate-load-model` diagnostic) -- informational only,
     # never wired into `adapt.py`.
-    intensity_match: Literal["match", "mismatch", "unknown"] = "unknown"
+    intensity_match: Literal["match", "partial", "mismatch", "unknown"] = "unknown"
     quality_summary: str | None = None
     execution: ExecutionScore | None = None
 

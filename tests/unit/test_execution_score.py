@@ -211,3 +211,35 @@ def test_mid_length_race_scored_with_interpolated_thresholds():
     phase_s = (total - 90) / 3
     s = race_execution_score(_phases(250 * 1.325, [250, 250, 250], phase_s=phase_s), _laps([250] * 3))
     assert _by(s)["start_control"].score == 50.0
+
+
+def _rated(intervals, *, in_band, below, dropped):
+    from swim_coach.models import RepRatingSummary
+
+    n = in_band + below + dropped
+    return intervals.model_copy(update={
+        "reps_in_band_pct": round(in_band / n * 100, 1),
+        "rep_ratings": RepRatingSummary(
+            rated=n, in_band=in_band, below_band_in_zone=below, dropped_zone=dropped,
+            held_zone_pct=round((n - dropped) / n * 100, 1), summary="x",
+        ),
+    })
+
+
+def test_reps_under_the_band_but_in_zone_earn_partial_intensity_credit(intervals, workout, session):
+    from swim_coach.execution_score import BELOW_BAND_IN_ZONE_CREDIT
+
+    all_below = _rated(intervals, in_band=0, below=18, dropped=0)
+    by = {c.name: c for c in workout_execution_score(all_below, workout, session).components}
+    assert by["intensity"].score == pytest.approx(100 * BELOW_BAND_IN_ZONE_CREDIT, abs=0.1)
+    assert "in the prescribed zone" in by["intensity"].detail
+
+    dropped = _rated(intervals, in_band=0, below=0, dropped=18)
+    by = {c.name: c for c in workout_execution_score(dropped, workout, session).components}
+    assert by["intensity"].score == 0.0
+
+
+def test_intensity_match_partial_when_the_zone_was_held_below_the_band(intervals):
+    assert intensity_match(_rated(intervals, in_band=0, below=18, dropped=0)) == "partial"
+    assert intensity_match(_rated(intervals, in_band=2, below=5, dropped=11)) == "mismatch"
+    assert intensity_match(_rated(intervals, in_band=14, below=0, dropped=4)) == "match"
