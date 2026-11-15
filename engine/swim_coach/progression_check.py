@@ -30,7 +30,7 @@ from swim_coach.progression import (
     week_stimulus_review,
 )
 from swim_coach.lever_read import read_levers
-from swim_coach.progression_check_levers import candidate_fix, lever_findings
+from swim_coach.progression_check_levers import candidate_fix, lever_findings, zone_jump_finding
 from swim_coach.progression_levers import LeverPolicy, SessionShape, default_policy
 from swim_coach.stimulus import SportProfile, StimulusDose, planned_dose, profile_for
 
@@ -239,12 +239,18 @@ def check_week_progression(
         profile = profile_for(session.sport)
         dose = planned_dose(session, athlete, recent_longest=recent.get(profile.name) if profile else None)
         read = usable.get((profile.name, dose.kind)) if profile and dose else None
-        if read is None or dose is None or dose.confidence != "structured":
+        if dose is None or profile is None or dose.confidence != "structured":
             continue
-        found = _session_findings(session, dose, read, profile, ledger, taper, week=week, athlete=athlete,
-                                  policy=policy or default_policy())
+        if not any(r.sport == profile.name and r.kind == dose.kind for r in reads):
+            jump = zone_jump_finding(session, dose, reads, athlete, policy or default_policy())
+            found, read = [jump] if jump else [], None
+        elif read is None:
+            continue
+        else:
+            found = _session_findings(session, dose, read, profile, ledger, taper, week=week, athlete=athlete,
+                                      policy=policy or default_policy())
         for finding in found:
-            key = (read.sport, read.kind)
+            key = (profile.name, dose.kind)
             if key not in best or _SEVERITY_RANK[finding.severity] < _SEVERITY_RANK[best[key].severity]:
                 best[key] = finding
     ids = {s.id for s in week.sessions}

@@ -17,10 +17,10 @@ Rules (Coach judgment, library/48-stimulus-progression.md "Guardrail findings"):
 
 from __future__ import annotations
 
-from swim_coach.models import PlanCheckFinding, Session, WeekPlan
+from swim_coach.models import Athlete, PlanCheckFinding, Session, WeekPlan
 from swim_coach.progression import ProgressionRead
 from swim_coach.progression_levers import LeverPolicy, MoveRead, SessionShape, classify_move, fmt_size
-from swim_coach.stimulus import profile_for
+from swim_coach.stimulus import StimulusDose, profile_for
 
 _TEST_ROLES = frozenset({"ramp"})
 
@@ -94,3 +94,24 @@ def lever_findings(
                             f"{text} The last clean session is at the {planned.zone} ceiling and no threshold test is planned this week.",
                             "More volume at the top of the zone adds little; a retest sets the next zone targets.", read))
     return out
+
+
+def zone_jump_finding(
+    session: Session, dose: StimulusDose, reads: list[ProgressionRead], athlete: Athlete, policy: LeverPolicy
+) -> PlanCheckFinding | None:
+    """`progression-zone-jump-<sport>-<kind>` (low): the planned session's zone has no history and an
+    easier zone's reading is below its promotion point. Silent without easier-zone history."""
+    profile = profile_for(session.sport)
+    planned = SessionShape.from_structure(session.structured, athlete, session.sport) if session.structured else None
+    easier = [r for r in reads if profile and r.sport == profile.name and r.shape is not None
+              and planned is not None and r.shape.zone < planned.zone]
+    if planned is None or not easier:
+        return None
+    base = max(easier, key=lambda r: r.shape.zone)
+    move = classify_move(base.shape, planned, policy, easier_best=base.shape)
+    if not move.harder_zone_without_base:
+        return None
+    text = (f"Planned {planned.describe()} on {session.date.isoformat()} is the athlete's first {dose.kind} work; the "
+            f"easier zone's last session was {base.shape.describe()}, below its {base.shape.zone} promotion point.")
+    return _finding(f"progression-zone-jump-{base.sport}-{dose.kind}", "low", text,
+                    "Starting a harder zone before the easier one is built raises the chance of a failed session.", base)
