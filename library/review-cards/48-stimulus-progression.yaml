@@ -32,7 +32,7 @@ cards:
   summary: Wellness on the 1 to 2 days after a session is strained at HRV -5%, resting HR +5% or a red composite. Missing
     data is unknown, never recovered.
   recommendation: Report recovery as informational, name the missing data, and never let unknown recovery block progress.
-  content_hash: ac280253f0dd35a92ad61689a9ef3c9a0d3dc8a2809c8ea4186b12b85d968547
+  content_hash: cff8a5c6f42f422cc30ee3ba8e5a4c203b7b584718a404338a067c4d5ac166df
 - section: 6-unplanned-work-and-the-rest-of-the-week-coach-judgment
   heading: 6. Unplanned work and the rest of the week (`Coach judgment:`)
   summary: Unplanned work flags a remaining session when it duplicated the stimulus at 75%, sits under 48 hours after hard
@@ -41,38 +41,35 @@ cards:
   content_hash: 792827a91b5456553c46594567a5612ed1dced8c1dec6338965a2e86e7e4af2d
 - section: 7-guardrail-findings-coach-judgment
   heading: 7. Guardrail findings (`Coach judgment:`)
-  summary: 'Week checks judge a planned session by lever moves when both sessions have a shape: several levers, an oversized
-    step, past the ceiling, ignoring a threshold rise, or no retest at the top.'
+  summary: 'Week checks judge a planned session by lever moves: several levers, oversized step, past the ceiling, ignored threshold rise, no retest, or a first harder-zone session.'
   recommendation: Quote both rungs and the lever changes, offer the candidates, say these are untested coach judgment, and
     keep the plan only with a stated reason.
-  content_hash: d1bc6792ec78470c6b43afa2b77ce04b9e0876b13e7da889bf335caeedd2736e
+  content_hash: f70ec0ddd1101852dca10a32f6c1f10461882b511c2f0b94373c30ce4aa7255b
 - section: 8-calibration-against-real-execution-data-coach-judgment
   heading: 8. Calibration against real execution data (`Coach judgment:`)
-  summary: Substituted kinds get no completion, endurance uses whole aerobic time, tiny quality doses fall back to endurance,
-    structured sessions are the reference over club rides, doses round to practical units.
+  summary: Substituted kinds get no completion, endurance uses whole aerobic time, only shaped unsubstituted sessions are read (others listed as also delivered), doses round to practical units.
   recommendation: Say these calibration rules are untested coach judgment and quote the floors and units used.
-  content_hash: 0a8df7b2ef45f75c36e4f4b565d77708357aaec28b8eb0af492d46b77965c47b
+  content_hash: 64c5252da400db9993398d40c759af279618517018ed07bdb0334e0936e43dc3
 - section: 9-the-lever-model-coach-judgment
   heading: 9. The lever model (`Coach judgment:`)
-  summary: A session is sets, reps, rep size and rest; progression moves one lever one step from the last clean session, from
-    entry shapes, with ceilings promoting or retesting. No study compares the levers.
+  summary: A dominant block of 75% of the work sets the shape; progression moves one lever one step from the last clean session, from entry shapes. No study compares the levers.
   recommendation: Propose one lever change at a time in rung notation, say lever order and steps are coach judgment, and never
     name a fixed workout list.
-  content_hash: 97c1fb8718dc3adf1c60a194e0102aef334e612f1cd100c72741b6a22a48c821
+  content_hash: a2caa4019e835a093cd1facefc9b3e436d292382a46e8a89e8628461789a517b
 - section: 10-ceilings-per-session-work-in-the-zone
   heading: '10. Ceilings: per-session work in the zone'
   summary: Per-session work ceilings come from tested cycling protocols (32 min threshold, 30 min at MLSS, 3 x 13 x 30/15
     VO2) and one swim study; the rest is coach judgment.
   recommendation: Quote the ceiling with its source and confidence; at the top, suggest a threshold test or the harder zone's
     entry instead of more volume.
-  content_hash: 6054afb9c59c0edfb1108780a8e3904096a2685119ccfe8b00fd69f7d1d5aae0
+  content_hash: 8cb5d2687756805d9511f1fbe2fdb9b78e02bfc0ba7e599a151dd2141149241f
 - section: 11-a-threshold-change-restarts-the-climb-coach-judgment
   heading: 11. A threshold change restarts the climb (`Coach judgment:`)
   summary: When FTP or CSS rises 2% or 1.5%, the reference session steps down levers, never below the entry shape, and the
     restart shape becomes the first candidate.
   recommendation: Tell the athlete the threshold rose and the next sessions restart lower so they will not fail; call the
     step count coach judgment.
-  content_hash: 40d06436a45cc2aa78f8da02eebd560b683fb3d77239ee2c3486df884dffee64
+  content_hash: f4663d07587cb0e592a48ab013839c29604238af290d0920576f74828f5394f0
 - section: research-needed
   heading: Research needed
   summary: 'Lists four gaps: how interval levers compare as progression steps and their rates, recovery thresholds, the hard-recovery
