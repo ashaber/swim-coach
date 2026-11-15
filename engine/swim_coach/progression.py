@@ -22,10 +22,12 @@ from swim_coach.load import (
     wellness_baseline_deviation,
     wellness_composite,
 )
-from swim_coach.models import Athlete, Session, WeekPlan, Wellness, Workout
+from swim_coach.models import Athlete, Session, ThresholdRecord, WeekPlan, Wellness, Workout
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
+from swim_coach.progression_levers import Candidate, RebaseRead, SessionShape
 from swim_coach.quality import match_workout_to_session
 from swim_coach.stimulus import (
+    QUALITY_KINDS,
     ExecutedStimulus,
     SportProfile,
     StimulusDose,
@@ -133,6 +135,10 @@ class StimulusRecord(BaseModel):
     recovery: RecoveryResponse
     workout_id: UUID | None = None
     session_id: UUID | None = None
+    # The sport's threshold on the session date (FTP watts, CSS pace) and whether a threshold record
+    # dated on or before it said so; False means the athlete's current value stands in for it.
+    anchor_value: float | None = None
+    anchor_known: bool = False
 
     def has_execution_data(self, unit: Unit) -> bool:
         """True when the dose comes from measured analytics (not session totals) and has work."""
@@ -186,6 +192,7 @@ def build_ledger(
     *,
     as_of: date,
     lookback_days: int = 42,
+    thresholds: list[ThresholdRecord] | None = None,
 ) -> list[StimulusRecord]:
     """One record per completed training workout in the lookback window, oldest first. Workouts are
     matched to planned sessions by `quality.match_workout_to_session` (which honours
@@ -206,11 +213,13 @@ def build_ledger(
         if executed is None:
             continue
         planned = planned_dose(session, athlete, recent_longest=longest) if session else None
+        anchor, known = profile.anchor_on(w.date, athlete, thresholds or [])
         records.append(
             StimulusRecord(
                 date=w.date, sport=w.sport, kind=executed.dose.kind, planned=session is not None,
                 planned_dose=planned, executed=executed, recovery=recovery_response(w.date, wellness, as_of=as_of),
                 workout_id=w.id, session_id=session.id if session else None,
+                anchor_value=anchor, anchor_known=known,
             )
         )
     return records
@@ -229,11 +238,18 @@ class ProgressionRead(BaseModel):
     reasons: list[str]
     last: StimulusRecord | None = None
     reference_dose: StimulusDose | None = None
+    reference: StimulusRecord | None = None  # the last clean session, the progression's starting point
     suggested_work_range: tuple[float, float] | None = None
     suggested_longest_rep_max: float | None = None
     verdict_reason: str | None = None  # the reason that decided the verdict
     days_since_last: int | None = None
     confidence: Literal["high", "medium", "low"]
+    # Lever read (`lever_read.read_levers`); empty when no regular shape could be derived.
+    shape: SessionShape | None = None
+    candidates: list[Candidate] = Field(default_factory=list)
+    rebase: RebaseRead | None = None
+    at_ceiling: bool = False
+    retest_suggested: bool = False
 
 
 def _round_to(value: float, step: float) -> float:
@@ -323,6 +339,7 @@ def _decide(
     clean = next((r for r in reversed(usable) if r.grade() == "clean"), None)
     base.last, base.days_since_last = last, (as_of - last.date).days
     base.reference_dose = clean.executed.dose if clean else None
+    base.reference = clean
     step, tol = PROGRESSION_STEP_FRACTION, REPEAT_TOLERANCE_FRACTION
     grades = [r.grade() for r in usable[-CONSECUTIVE_REPEATS_TO_REDUCE:]]
     base.reasons.append(f"Last session {_describe(last, unit)}.")
@@ -349,11 +366,21 @@ def _decide(
     return base
 
 
+def _prefer_prescribed(usable: list[StimulusRecord], kind: StimulusKind) -> list[StimulusRecord]:
+    """For a quality kind, the sessions that were planned or whose reps form one regular shape, when any
+    exist: an unstructured ride whose detected efforts add up to a lot of time in the zone (a club ride)
+    must not become the reference while a structured session is in the window."""
+    if kind not in QUALITY_KINDS:
+        return usable
+    prescribed = [r for r in usable if r.planned or SessionShape.from_executed(r) is not None]
+    return prescribed or usable
+
+
 def _read_group(
     sport: str, kind: StimulusKind, records: list[StimulusRecord], profile: SportProfile, as_of: date
 ) -> ProgressionRead:
     unit = profile.unit
-    usable = [r for r in records if r.has_execution_data(unit)]
+    usable = _prefer_prescribed([r for r in records if r.has_execution_data(unit)], kind)
     base = ProgressionRead(sport=sport, kind=kind, verdict="insufficient_data", unit=unit, reasons=[], confidence="low")
     if not usable:
         base.last = records[-1] if records else None

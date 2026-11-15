@@ -507,7 +507,7 @@ class Candidate(BaseModel):
     rung: str
     lever: str
     change: str
-    direction: Literal["up", "down", "repeat", "entry", "promote", "retest"]
+    direction: Literal["up", "down", "repeat", "entry", "promote", "retest", "rebase"]
     work_delta_pct: float | None = None
     density_delta: float | None = None
     basis: str
@@ -833,7 +833,10 @@ class RebaseRead(BaseModel):
 
 
 def _step_down(shape: SessionShape, zp: ZonePolicy, floor_work: float) -> SessionShape | None:
-    """The first one-step-down shape (policy order reversed) that stays at or above `floor_work`."""
+    """The first one-step-down shape (policy order reversed) that stays at or above `floor_work`; none
+    once `shape` is itself at that floor."""
+    if shape.work() <= floor_work + 1e-9:
+        return None
     return next((m for _, m in _moves(shape, zp, forward=False) if m.work() >= floor_work - 1e-9), None)
 
 
