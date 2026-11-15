@@ -101,8 +101,8 @@ def test_a_substituted_record_never_grades_poor_nor_reduces():
     assert len(ledger) == 1 and ledger[0].kind == "tempo" and ledger[0].substituted
     assert ledger[0].grade() != "poor"
     (r,) = read_progression(ledger, as_of=AS_OF)
-    assert r.verdict != "reduce"
-    assert any("planned endurance, delivered tempo" in x for x in r.reasons)
+    assert r.verdict == "insufficient_data"  # a substituted session never sets a verdict
+    assert any("Also delivered" in x and "planned endurance" in x for x in r.reasons)
 
 
 def test_a_matching_kind_still_gets_completion():

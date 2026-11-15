@@ -24,9 +24,10 @@ from swim_coach.load import (
 )
 from swim_coach.models import Athlete, Session, ThresholdRecord, WeekPlan, Wellness, Workout
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP
-from swim_coach.progression_levers import Candidate, RebaseRead, SessionShape
+from swim_coach.progression_levers import Candidate, RebaseRead, SessionShape, shape_from_executed, shape_from_structure
 from swim_coach.quality import match_workout_to_session
 from swim_coach.stimulus import (
+    KIND_RANK,
     QUALITY_KINDS,
     ExecutedStimulus,
     SportProfile,
@@ -139,6 +140,25 @@ class StimulusRecord(BaseModel):
     # dated on or before it said so; False means the athlete's current value stands in for it.
     anchor_value: float | None = None
     anchor_known: bool = False
+    # The planned session's dominant block, for a record with no executed shape.
+    planned_shape: SessionShape | None = None
+    planned_shape_note: str | None = None
+
+    def lever_shape(self) -> tuple[SessionShape | None, str | None]:
+        """(shape, note) this record can progress from: the executed block, else the planned block when
+        the session was completed (at least `COMPLETION_PROGRESS_MIN_PCT`). Never for a substituted record."""
+        if self.substituted:
+            return None, None
+        shape, note = shape_from_executed(self)
+        if shape is not None:
+            return shape, note
+        done = self.executed.completion_pct
+        zone_kind = KIND_RANK.get(self.kind)
+        if self.planned_shape and zone_kind and self.planned_shape.zone == f"Z{zone_kind}" and (
+            done is not None and done >= COMPLETION_PROGRESS_MIN_PCT
+        ):
+            return self.planned_shape, self.planned_shape_note
+        return None, None
 
     def has_execution_data(self, unit: Unit) -> bool:
         """True when the dose comes from measured analytics (not session totals) and has work."""
@@ -214,18 +234,30 @@ def build_ledger(
             continue
         planned = planned_dose(session, athlete, recent_longest=longest) if session else None
         anchor, known = profile.anchor_on(w.date, athlete, thresholds or [])
+        plan_shape, plan_note = (
+            shape_from_structure(session.structured, athlete, session.sport) if session and session.structured else (None, None)
+        )
         records.append(
             StimulusRecord(
                 date=w.date, sport=w.sport, kind=executed.dose.kind, planned=session is not None,
                 planned_dose=planned, executed=executed, recovery=recovery_response(w.date, wellness, as_of=as_of),
                 workout_id=w.id, session_id=session.id if session else None,
-                anchor_value=anchor, anchor_known=known,
+                anchor_value=anchor, anchor_known=known, planned_shape=plan_shape, planned_shape_note=plan_note,
             )
         )
     return records
 
 
 Verdict = Literal["progress", "repeat", "reduce", "rebuild", "insufficient_data"]
+
+
+class AlsoDelivered(BaseModel):
+    """Quality work of a kind that is not read for progression: a substituted session or one with no
+    regular shape. `label` says why ("planned endurance", "unstructured")."""
+
+    date: date
+    work: float | None = None  # in the read's unit
+    label: str
 
 
 class ProgressionRead(BaseModel):
@@ -250,6 +282,8 @@ class ProgressionRead(BaseModel):
     rebase: RebaseRead | None = None
     at_ceiling: bool = False
     retest_suggested: bool = False
+    shape_note: str | None = None  # e.g. "ignored 2 primer reps"
+    also_delivered: list[AlsoDelivered] = Field(default_factory=list)
 
 
 def _round_to(value: float, step: float) -> float:
@@ -366,27 +400,50 @@ def _decide(
     return base
 
 
-def _prefer_prescribed(usable: list[StimulusRecord], kind: StimulusKind) -> list[StimulusRecord]:
-    """For a quality kind, the sessions that were planned or whose reps form one regular shape, when any
-    exist: an unstructured ride whose detected efforts add up to a lot of time in the zone (a club ride)
-    must not become the reference while a structured session is in the window."""
+def _lever_usable(
+    usable: list[StimulusRecord], kind: StimulusKind
+) -> tuple[list[StimulusRecord], list[StimulusRecord]]:
+    """(records the verdict is read from, records only reported). For a quality kind the verdict is read
+    from sessions with a shape, never from a substituted session or an unstructured ride (a club ride)
+    while a shaped session exists. With none, from planned sessions that were not substituted, else any
+    that was not substituted (the dose fallback)."""
     if kind not in QUALITY_KINDS:
-        return usable
-    prescribed = [r for r in usable if r.planned or SessionShape.from_executed(r) is not None]
-    return prescribed or usable
+        return usable, []
+    shaped = [r for r in usable if r.lever_shape()[0] is not None]
+    kept = shaped or [r for r in usable if not r.substituted]
+    chosen = shaped or [r for r in kept if r.planned] or kept
+    return chosen, [r for r in usable if r not in chosen]
+
+
+def _also_delivered(extra: list[StimulusRecord], read: ProgressionRead, profile: SportProfile) -> None:
+    """Record the work that was delivered but not read, with one summary reason line."""
+    unit = profile.unit
+    read.also_delivered = [
+        AlsoDelivered(date=r.date, work=r.executed.dose.work_in(unit),
+                      label=f"planned {r.planned_kind}" if r.substituted else "unstructured")
+        for r in extra
+    ]
+    parts = [f"{format_amount(a.work, unit)} of {read.kind} in {a.label} work on {a.date.strftime('%m-%d')}"
+             for a in read.also_delivered[-3:]]
+    more = f" (and {len(extra) - 3} more)" if len(extra) > 3 else ""
+    read.reasons.append(f"Also delivered, not read for progression: {'; '.join(parts)}{more}.")
 
 
 def _read_group(
     sport: str, kind: StimulusKind, records: list[StimulusRecord], profile: SportProfile, as_of: date
 ) -> ProgressionRead:
     unit = profile.unit
-    usable = _prefer_prescribed([r for r in records if r.has_execution_data(unit)], kind)
+    usable, extra = _lever_usable([r for r in records if r.has_execution_data(unit)], kind)
     base = ProgressionRead(sport=sport, kind=kind, verdict="insufficient_data", unit=unit, reasons=[], confidence="low")
     if not usable:
-        base.last = records[-1] if records else None
-        base.reasons.append(f"No usable executed {kind} data ({len(records)} estimated-only record(s)): insufficient execution data to read progression.")
+        base.last = None if extra else (records[-1] if records else None)
+        base.reasons.append(f"No usable executed {kind} data ({len(records)} record(s), none with a plan or regular structure): insufficient execution data to read progression.")
+        if extra:
+            _also_delivered(extra, base, profile)
         return base
     _decide(base, usable, profile, as_of)
+    if extra:
+        _also_delivered(extra, base, profile)
     stale = base.verdict == "rebuild"
     base.confidence = _confidence(len(usable), usable[-1].recovery.status, stale)
     return base

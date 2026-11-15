@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 
 from swim_coach.models import Athlete
+from swim_coach.formatting import format_amount
 from swim_coach.progression import ProgressionRead, StimulusRecord, read_progression
 from swim_coach.progression_levers import (
     Candidate,
@@ -24,11 +25,6 @@ from swim_coach.progression_levers import (
 from swim_coach.stimulus import KIND_RANK, profile_for
 
 LENGTHEN_REASON_PREFIX = "Longest rep was"
-
-
-def _reference_record(read: ProgressionRead) -> StimulusRecord | None:
-    """The record the next step is measured from: the last clean session, else the last one."""
-    return read.reference or read.last
 
 
 def _restart(rebase: RebaseRead, reference: SessionShape, policy: LeverPolicy) -> Candidate:
@@ -64,15 +60,34 @@ def _set_cause(read: ProgressionRead, text: str) -> None:
     read.verdict_reason = text
 
 
+def _entry_read(read: ProgressionRead, policy: LeverPolicy) -> ProgressionRead:
+    """No session to progress from but quality work of this kind was delivered unstructured: offer the
+    zone's entry shape and say how much was delivered, so the coach can start higher."""
+    rank = KIND_RANK.get(read.kind)
+    if not read.also_delivered or rank is None or not policy.has_zone(read.sport, f"Z{rank}"):
+        return read
+    total = sum(a.work or 0.0 for a in read.also_delivered)
+    count = len(read.also_delivered)
+    read.candidates = next_shapes(None, policy, verdict="progress", group=read.sport, zone=f"Z{rank}")
+    read.reasons.append(
+        f"{count} unstructured {read.kind} session{'s' if count != 1 else ''} delivered in the lookback "
+        f"({format_amount(total, read.unit)} in total) but none with a plan or regular shape to progress from; "
+        f"the zone's entry shape is offered (start higher if the athlete is ready)."
+    )
+    return read
+
+
 def _lever_read(read: ProgressionRead, athlete: Athlete, policy: LeverPolicy) -> ProgressionRead:
-    record = _reference_record(read)
+    if read.verdict == "insufficient_data":
+        return _entry_read(read, policy)
+    record = read.last
     profile = profile_for(record.sport) if record else None
-    shape = SessionShape.from_executed(record) if record and read.kind in _ZONE_KINDS else None
+    shape, note = record.lever_shape() if record and read.kind in _ZONE_KINDS else (None, None)
     if shape is None or profile is None or not policy.has_zone(shape.sport_group, shape.zone):
         return read
     then = record.anchor_value if record.anchor_known else None
     rebase = rebase_for_threshold_change(shape, anchor_then=then, anchor_now=profile.athlete_anchor(athlete), policy=policy)
-    read.shape, read.rebase = shape, rebase
+    read.shape, read.shape_note, read.rebase = shape, note, rebase
     _attach_candidates(read, shape, rebase, policy)
     return read
 
