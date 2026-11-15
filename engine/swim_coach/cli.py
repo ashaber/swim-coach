@@ -640,6 +640,18 @@ def _parse_scenario(spec: str) -> TrainingScenario:
     return TrainingScenario(**fields)
 
 
+def _with_taper(scenario: TrainingScenario, spec: str | None) -> TrainingScenario:
+    """Apply a `weeks:reduction` taper (the last `weeks` of the horizon) to a scenario."""
+    if spec is None:
+        return scenario
+    weeks, _, reduction = spec.partition(":")
+    if not reduction:
+        raise ValueError(f"taper {spec!r} must look like weeks:reduction")
+    return TrainingScenario(
+        **{**scenario.model_dump(), "taper_weeks": int(weeks), "taper_reduction": float(reduction)}
+    )
+
+
 def _cmd_project(args: argparse.Namespace, store: StoreInterface) -> int:
     """Compare hypothetical training scenarios (and optionally the stored macro) on projected
     load and freshness -- `swim_coach.projection`; prints one JSON comparison, writes nothing."""
@@ -647,7 +659,7 @@ def _cmd_project(args: argparse.Namespace, store: StoreInterface) -> int:
     try:
         athlete = store.load_athlete(slug)
         events = store.load_events(slug)
-        scenarios = [_parse_scenario(spec) for spec in args.scenario]
+        scenarios = [_with_taper(_parse_scenario(spec), args.taper) for spec in args.scenario]
     except Exception as exc:  # noqa: BLE001
         return _error(f"scenario or athlete data invalid: {exc}")
     as_of = athlete_today(athlete)
@@ -1892,6 +1904,9 @@ def build_parser() -> argparse.ArgumentParser:
     horizon = p_project.add_mutually_exclusive_group()
     horizon.add_argument("--weeks", type=int, default=12, help="projection length in weeks (default 12)")
     horizon.add_argument("--until", help="YYYY-MM-DD end of projection")
+    p_project.add_argument(
+        "--taper", help="weeks:reduction taper applied to every scenario, over the last weeks of the horizon"
+    )
     p_project.add_argument(
         "--include-current-plan", dest="include_current_plan", action="store_true",
         help="add the athlete's stored macro plan to the comparison",
