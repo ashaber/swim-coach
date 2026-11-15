@@ -20,12 +20,13 @@ cards:
     under 75% completion or 50% in band; rebuild after 28 days.'
   recommendation: Quote the verdict with its numbers and call the step sizes unvalidated coach judgment.
   content_hash: 20c23e8a26c61fd6ebde7693b8acddaf592fa75495897dc7b53ef276f149a24c
-- section: 4-rep-length-before-total-volume-coach-judgment
-  heading: 4. Rep length before total volume (`Coach judgment:`)
-  summary: When the longest rep is short for the kind, hold total work and lengthen reps by one step toward a per-sport target
-    before adding volume.
-  recommendation: Suggest longer reps before more total work, and say the targets are untested judgment.
-  content_hash: 7515cacaa47ea97ce21079e771682e489c9ef2bc6fca7b3bf918efc3269a41a9
+- section: 4-fallback-when-no-shape-is-derivable-rep-length-before-total-volume-coach-judgment
+  heading: '4. Fallback when no shape is derivable: rep length before total volume (`Coach judgment:`)'
+  summary: When a session has no regular shape and the longest rep is short for the kind, the dose read holds total work and
+    lengthens reps one step toward a per-sport target.
+  recommendation: Use this only when no shape can be derived; otherwise suggest lever candidates. Say the targets are untested
+    judgment.
+  content_hash: ad7420d20f3546907a7df82e87776d50c0cc2574778bf2af4e190ca87972684b
 - section: 5-recovery-response-coach-judgment
   heading: 5. Recovery response (`Coach judgment:`)
   summary: Wellness on the 1 to 2 days after a session is strained at HRV -5%, resting HR +5% or a red composite. Missing
@@ -40,19 +41,41 @@ cards:
   content_hash: 792827a91b5456553c46594567a5612ed1dced8c1dec6338965a2e86e7e4af2d
 - section: 7-guardrail-findings-coach-judgment
   heading: 7. Guardrail findings (`Coach judgment:`)
-  summary: Week checks flag a planned dose past one more step, a repeat of a failed dose, two stalled sessions, or a too-long
-    rep; weak data never fires them.
-  recommendation: Quote the numbers, say these are untested coach judgment, and keep the plan only with a stated reason.
-  content_hash: bdf505661c95118657b9469c0e41b0b2f3fcf86f1966f48575fb20d1d11ca04d
+  summary: 'Week checks judge a planned session by lever moves when both sessions have a shape: several levers, an oversized
+    step, past the ceiling, ignoring a threshold rise, or no retest at the top.'
+  recommendation: Quote both rungs and the lever changes, offer the candidates, say these are untested coach judgment, and
+    keep the plan only with a stated reason.
+  content_hash: d1bc6792ec78470c6b43afa2b77ce04b9e0876b13e7da889bf335caeedd2736e
 - section: 8-calibration-against-real-execution-data-coach-judgment
   heading: 8. Calibration against real execution data (`Coach judgment:`)
   summary: Substituted kinds get no completion, endurance uses whole aerobic time, tiny quality doses fall back to endurance,
-    estimated runs never progress, doses round to practical units.
+    structured sessions are the reference over club rides, doses round to practical units.
   recommendation: Say these calibration rules are untested coach judgment and quote the floors and units used.
-  content_hash: b18a6fecd1ed935e8b98dee1e4f0d38b320e8c73ac43bd4b5c33e9f6b5ad705c
+  content_hash: 0a8df7b2ef45f75c36e4f4b565d77708357aaec28b8eb0af492d46b77965c47b
+- section: 9-the-lever-model-coach-judgment
+  heading: 9. The lever model (`Coach judgment:`)
+  summary: A session is sets, reps, rep size and rest; progression moves one lever one step from the last clean session, from
+    entry shapes, with ceilings promoting or retesting. No study compares the levers.
+  recommendation: Propose one lever change at a time in rung notation, say lever order and steps are coach judgment, and never
+    name a fixed workout list.
+  content_hash: 97c1fb8718dc3adf1c60a194e0102aef334e612f1cd100c72741b6a22a48c821
+- section: 10-ceilings-per-session-work-in-the-zone
+  heading: '10. Ceilings: per-session work in the zone'
+  summary: Per-session work ceilings come from tested cycling protocols (32 min threshold, 30 min at MLSS, 3 x 13 x 30/15
+    VO2) and one swim study; the rest is coach judgment.
+  recommendation: Quote the ceiling with its source and confidence; at the top, suggest a threshold test or the harder zone's
+    entry instead of more volume.
+  content_hash: 6054afb9c59c0edfb1108780a8e3904096a2685119ccfe8b00fd69f7d1d5aae0
+- section: 11-a-threshold-change-restarts-the-climb-coach-judgment
+  heading: 11. A threshold change restarts the climb (`Coach judgment:`)
+  summary: When FTP or CSS rises 2% or 1.5%, the reference session steps down levers, never below the entry shape, and the
+    restart shape becomes the first candidate.
+  recommendation: Tell the athlete the threshold rose and the next sessions restart lower so they will not fail; call the
+    step count coach judgment.
+  content_hash: 40d06436a45cc2aa78f8da02eebd560b683fb3d77239ee2c3486df884dffee64
 - section: research-needed
   heading: Research needed
-  summary: 'Lists four gaps: interval progression rates, recovery thresholds, the hard-recovery window in masters athletes,
-    and swim pace-zone reliability.'
-  recommendation: State plainly that no evidence backs the progression numbers and treat them as defaults to test.
-  content_hash: 02f7766c71bcc12993567b33601a6ac033a2dac76cdf13dc9935c669b6aa9d19
+  summary: 'Lists four gaps: how interval levers compare as progression steps and their rates, recovery thresholds, the hard-recovery
+    window in masters athletes, and swim pace-zone reliability.'
+  recommendation: State plainly that no evidence backs the lever order or step sizes and treat them as defaults to test.
+  content_hash: 39f2bd31f536146ad084b13c4d9d476e2b69c2d70e7d5468c1bc22b511a3142d
