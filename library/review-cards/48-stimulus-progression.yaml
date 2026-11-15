@@ -38,6 +38,12 @@ cards:
     work, or pushes week load past the 8% rail.
   recommendation: Tell the athlete which remaining session is affected and why; suggest, never reschedule.
   content_hash: 792827a91b5456553c46594567a5612ed1dced8c1dec6338965a2e86e7e4af2d
+- section: 7-guardrail-findings-coach-judgment
+  heading: 7. Guardrail findings (`Coach judgment:`)
+  summary: Week checks flag a planned dose past one more step, a repeat of a failed dose, two stalled sessions, or a too-long
+    rep; weak data never fires them.
+  recommendation: Quote the numbers, say these are untested coach judgment, and keep the plan only with a stated reason.
+  content_hash: bdf505661c95118657b9469c0e41b0b2f3fcf86f1966f48575fb20d1d11ca04d
 - section: research-needed
   heading: Research needed
   summary: 'Lists four gaps: interval progression rates, recovery thresholds, the hard-recovery window in masters athletes,

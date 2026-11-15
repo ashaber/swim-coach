@@ -213,6 +213,7 @@ a coach to treat adversarial review:
 - **Don't pad your own reasoning to sound more thorough** than the finding
   warrants — match the engine's own "cap it at six, the ones that matter
   get buried otherwise" discipline in how you respond, too.
+- `progression-*` and `unplanned-*` findings are judgment findings backed by the athlete's own execution data (last session, reference dose, recovery) and unplanned work this week. Quote their numbers; keep the plan only with a stated reason.
 - The one place a finding is **not** advisory: a `confirm-*` id (the
   +8%/+15% safety rails) on `author_week_plan`. These still require an
   explicit accepted decision to persist — that's a hard stop, not a

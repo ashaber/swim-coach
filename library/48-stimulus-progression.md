@@ -40,6 +40,12 @@ Unplanned work is any workout with no matched session. For each remaining planne
 
 **Test:** after weeks with flagged impacts, check whether the athlete skipped, shortened or failed the flagged session more often than unflagged ones.
 
+## 7. Guardrail findings (`Coach judgment:`)
+
+`check_week` can run the progression read against an authored week. All thresholds reuse `PROGRESSION_STEP_FRACTION`; no new number. `progression-jump-*` fires when planned work exceeds the top of the suggested range by more than one further step (high when the verdict is reduce or rebuild, else medium). `progression-ignores-*` (medium) fires when the verdict is reduce or rebuild and planned work is at or above the last reference dose. `progression-stalled-*` (low) fires when the verdict is progress and planned work is at or under the reference for the second session of that kind in a row; it is silent in taper and race weeks. `progression-rep-length-*` (low) fires when the longest planned rep exceeds the suggested cap by more than one step. `unplanned-*` carries the section 6 impacts through. Low-confidence, insufficient-data and estimated-dose cases never fire the first four.
+
+**Test:** over a season, check whether weeks that drew a jump or ignores finding and kept the plan had more skipped, shortened or failed sessions of that kind than weeks that drew none. If not, widen the allowance.
+
 ## Research needed
 
 1. Interval progression rates: how much work or rep length trained adults add per exposure for tempo, threshold and vo2 work (bike and swim separately).
