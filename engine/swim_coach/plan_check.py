@@ -65,6 +65,7 @@ from swim_coach.models import (
 )
 from swim_coach.models import WorkoutRepeat, WorkoutStep, WorkoutStructure
 from swim_coach.plan import WEEKLY_VOLUME_RAMP_CAP, evaluate_week_realism
+from swim_coach.progression_check import ProgressionInputs, check_week_progression
 from swim_coach.stimulus import intensity_is_hard, walk_leaves, zone_rank
 from swim_coach.taper_search import RACE_DAY_TSB_BAND
 
@@ -1246,6 +1247,7 @@ def check_week(
     *,
     recent_weeks: list[WeekPlan],
     events: list[Event] | None = None,
+    progression: ProgressionInputs | None = None,
 ) -> PlanCheckReport:
     """Red-team one coach-authored WEEK of real `Session`s against its
     macro row and recent history. Never raises. `+8%` volume / `+15%`
@@ -1259,7 +1261,8 @@ def check_week(
     days (double header) never trip the back-to-back flag; an untagged one also draws a
     low-severity `authoring` finding asking for `kind`. Each finding carries a `category`:
     `authoring` = mechanical step-tree defects the coach can fix itself; everything else, and
-    every `confirm-*` safety rail, is `judgment`."""
+    every `confirm-*` safety rail, is `judgment`. `progression`: when given, the week's
+    `progression-*` / `unplanned-*` findings (`progression_check`) join the others before ranking."""
     findings: list[PlanCheckFinding] = []
     race_dates = frozenset(e.event_date for e in events or [])
 
@@ -1330,6 +1333,10 @@ def check_week(
         authoring.extend(_check_warmup_and_primer(session, athlete))
         authoring.extend(_check_race_warmup(session, athlete, week))
     findings.extend(f.model_copy(update={"category": "authoring"}) for f in authoring)
+    if progression is not None:
+        findings.extend(check_week_progression(
+            week, athlete, reads=progression.reads, review=progression.review,
+            ledger=progression.ledger, macro_week=macro_week))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)
