@@ -14,6 +14,7 @@ human review in `library/49-plan-projection.md`.
 from __future__ import annotations
 
 import itertools
+import re
 import statistics
 import uuid
 from dataclasses import dataclass
@@ -30,9 +31,12 @@ from swim_coach.load import (
 )
 from swim_coach.models import Athlete, Event, MacroPlan, MacroWeek, PlanCheckFinding, WeekPlan, Workout, Wellness
 from swim_coach.plan_check import (
+    CTL_RAMP_CAP_PER_WEEK,
+    CTL_RAMP_CAP_PER_WEEK_MASTERS_OR_INJURY,
     MASTERS_AGE_THRESHOLD,
     RECOVERY_CADENCE_WEEKS,
     RECOVERY_CADENCE_WEEKS_MASTERS_OR_INJURY,
+    SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS,
     SUSTAINED_LOW_TSB_THRESHOLD,
     PlanCheckReport,
     _age_years,
@@ -304,50 +308,249 @@ class Metric(BaseModel):
     key: str
     label: str
     unit: str
-    value: float | None
+    value: int | float | None
+
+
+_COUNT_KEYS = frozenset(
+    {
+        "days_below_tsb_threshold",
+        "hard_session_count",
+        "finding_count",
+        "back_to_back_hard_pairs",
+        "strength_before_key_count",
+    }
+)
+_MONOTONY_KEYS = frozenset({"mean_weekly_monotony", "monotony"})
+
+
+def _precision(key: str) -> int:
+    """Decimal places a metric is reported at: counts 0, monotony 2, everything else 1."""
+    if key in _COUNT_KEYS:
+        return 0
+    return 2 if key in _MONOTONY_KEYS else 1
+
+
+def _round_metric(key: str, value: float | None) -> int | float | None:
+    if value is None:
+        return None
+    digits = _precision(key)
+    return int(round(value)) if digits == 0 else round(value, digits)
+
+
+def _metric(*, key: str, label: str, unit: str, value: float | None) -> Metric:
+    """A `Metric` rounded for output; the maths upstream stays unrounded."""
+    return Metric(key=key, label=label, unit=unit, value=_round_metric(key, value))
+
+
+def _round_opt(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+# --- window arithmetic ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Window:
+    start: date
+    end: date
+
+    def overlap_days(self, week_start: date) -> int:
+        first = max(self.start, week_start)
+        last = min(self.end, week_start + timedelta(days=6))
+        return max((last - first).days + 1, 0)
+
+    def contains_week(self, week_start: date) -> bool:
+        return self.start <= week_start and week_start + timedelta(days=6) <= self.end
+
+
+def _seed_ctl(series: list[tuple[date, float, float, float]], window_start: date, fallback: float) -> float:
+    """CTL on the day before `window_start` when the series has it, else `fallback`."""
+    prior = window_start - timedelta(days=1)
+    return next((ctl for d, ctl, _a, _t in series if d == prior), fallback)
+
+
+def _peak_weekly_ramp(
+    series: list[tuple[date, float, float, float]], seed_ctl: float
+) -> tuple[float, date] | None:
+    """Largest CTL gain across consecutive full 7-day blocks (the first measured from
+    `seed_ctl`) and the first day of that block."""
+    ends = [series[i][1] for i in range(6, len(series), 7)]
+    if not ends:
+        return None
+    ramps = [b - a for a, b in zip([seed_ctl, *ends], ends)]
+    best = max(range(len(ramps)), key=lambda i: (ramps[i], -i))
+    return ramps[best], series[0][0] + timedelta(days=7 * best)
+
+
+def _longest_low_tsb_run(series: list[tuple[date, float, float, float]]) -> tuple[int, date | None]:
+    best, best_start, run, run_start = 0, None, 0, None
+    for day, _c, _a, tsb in series:
+        if tsb >= SUSTAINED_LOW_TSB_THRESHOLD:
+            run = 0
+            continue
+        run_start = day if run == 0 else run_start
+        run += 1
+        if run > best:
+            best, best_start = run, run_start
+    return best, best_start
+
+
+def _ramp_cap(athlete: Athlete, as_of: date) -> float:
+    """The CTL ramp cap `check_macro` applies to this athlete."""
+    age = _age_years(athlete.dob, as_of)
+    masters = age is not None and age >= MASTERS_AGE_THRESHOLD
+    return CTL_RAMP_CAP_PER_WEEK_MASTERS_OR_INJURY if masters else CTL_RAMP_CAP_PER_WEEK
+
+
+def _flags(
+    series: list[tuple[date, float, float, float]], peak: tuple[float, date] | None, cap: float
+) -> list[str]:
+    """Threshold flags from numbers already projected, using plan_check's own constants."""
+    flags: list[str] = []
+    if peak is not None and peak[0] > cap:
+        flags.append(f"peak ramp {peak[0]:.1f}/wk exceeds the {cap:.0f}/wk cap in week of {peak[1].isoformat()}")
+    run, run_start = _longest_low_tsb_run(series)
+    if run >= SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS and run_start is not None:
+        flags.append(
+            f"TSB below {SUSTAINED_LOW_TSB_THRESHOLD:.0f} for {run} consecutive days from {run_start.isoformat()} "
+            f"(the sustained-low-TSB rule flags {SUSTAINED_LOW_TSB_MIN_CONSECUTIVE_DAYS}+ days)"
+        )
+    return flags
+
+
+def _mean_weekly_monotony(weeks: list[MacroWeek], loads: dict[date, float], window: _Window) -> float | None:
+    values: list[float] = []
+    for week in weeks:
+        if not window.contains_week(week.week_start):
+            continue
+        days = [week.week_start + timedelta(days=i) for i in range(7)]
+        m = monotony({d: loads.get(d, 0.0) for d in days})
+        if m is not None:
+            values.append(m)
+    return statistics.mean(values) if values else None
+
+
+def _min_hours_between(hard_days: list[date]) -> float | None:
+    if len(hard_days) < 2:
+        return None
+    return min((b - a).days for a, b in zip(hard_days, hard_days[1:])) * HOURS_PER_DAY
+
+
+def _derive(
+    series: list[tuple[date, float, float, float]],
+    weeks: list[MacroWeek],
+    loads: dict[date, float],
+    hard_days: list[date] | None,
+    seed_ctl: float,
+    cap: float,
+    window: _Window,
+) -> dict:
+    """Every window-dependent field of a projection, computed over `window` only."""
+    cut = [p for p in series if window.start <= p[0] <= window.end]
+    if not cut:
+        raise ValueError("projection has no days inside the requested window")
+    peak = _peak_weekly_ramp(cut, seed_ctl)
+    in_range = [d for d in (hard_days or []) if window.start <= d <= window.end]
+    kept = [w for w in weeks if window.overlap_days(w.week_start) > 0]
+    return {
+        "start": window.start,
+        "ctl_start": seed_ctl,
+        "series": cut,
+        "weeks": kept,
+        "ctl_end": cut[-1][1],
+        "tsb_end": cut[-1][3],
+        "peak_ctl_ramp_per_week": None if peak is None else peak[0],
+        "peak_ctl_ramp_week": None if peak is None else peak[1],
+        "days_below_tsb_threshold": sum(1 for *_x, tsb in cut if tsb < SUSTAINED_LOW_TSB_THRESHOLD),
+        "mean_weekly_monotony": _mean_weekly_monotony(kept, loads, window),
+        "total_hours": sum((w.hours or 0.0) * window.overlap_days(w.week_start) / 7 for w in kept),
+        "hard_session_count": None if hard_days is None else len(in_range),
+        "min_hours_between_hard": None if hard_days is None else _min_hours_between(in_range),
+        "flags": _flags(cut, peak, cap),
+    }
 
 
 class ScenarioProjection(BaseModel):
-    """Projected load and freshness for one scenario or authored plan."""
+    """Projected load and freshness for one scenario or authored plan over
+    `start`..`coverage_end`, the dates its own authored/scenario data cover."""
 
     name: str
+    start: date
+    coverage_end: date
+    ctl_start: float
+    ramp_cap_per_week: float
     weeks: list[MacroWeek]
     series: list[tuple[date, float, float, float]]
+    daily_loads: dict[date, float]
+    hard_days: list[date] | None
+    event_names: dict[str, str]
     ctl_end: float
     tsb_end: float
     event_metrics: list[EventMetric]
     peak_ctl_ramp_per_week: float | None
+    peak_ctl_ramp_week: date | None
     days_below_tsb_threshold: int
     mean_weekly_monotony: float | None
     total_hours: float
     hard_session_count: int | None
     min_hours_between_hard: float | None
+    flags: list[str]
     verdict: str
     findings: list[PlanCheckFinding]
     goal_findings: list[PlanCheckFinding]
     assumptions: list[str]
 
+    def within(self, start: date, end: date, notes: list[str] | None = None) -> ScenarioProjection:
+        """The same projection with every metric recomputed over `start`..`end`; events
+        outside it are dropped with an assumption line."""
+        window = _Window(start, end)
+        seed = _seed_ctl(self.series, start, self.ctl_start)
+        fields = _derive(self.series, self.weeks, self.daily_loads, self.hard_days, seed, self.ramp_cap_per_week, window)
+        kept = [e for e in self.event_metrics if start <= e.date <= end]
+        dropped = [
+            f"Event {e.name} ({e.date.isoformat()}) is outside the compared window and is dropped from this comparison."
+            for e in self.event_metrics
+            if e not in kept
+        ]
+        return self.model_copy(
+            update={
+                **fields,
+                "event_metrics": kept,
+                "coverage_end": min(self.coverage_end, end),
+                "assumptions": [*self.assumptions, *(notes or []), *dropped],
+            }
+        )
+
     def metrics(self) -> list[Metric]:
-        """The comparable metrics, each as a labelled number (no judgement attached)."""
+        """The comparable metrics, each as a labelled, rounded number (no judgement attached)."""
         rows = [
-            Metric(key="ctl_end", label="CTL at end of projection", unit="", value=self.ctl_end),
-            Metric(key="tsb_end", label="TSB at end of projection", unit="", value=self.tsb_end),
-            Metric(key="peak_ctl_ramp_per_week", label="Peak weekly CTL ramp", unit="/wk", value=self.peak_ctl_ramp_per_week),
-            Metric(key="days_below_tsb_threshold", label=f"Days with TSB below {SUSTAINED_LOW_TSB_THRESHOLD:.0f}", unit="days", value=float(self.days_below_tsb_threshold)),
-            Metric(key="mean_weekly_monotony", label="Mean weekly monotony", unit="", value=self.mean_weekly_monotony),
-            Metric(key="total_hours", label="Total planned hours", unit="h", value=self.total_hours),
-            Metric(key="hard_session_count", label="Hard sessions", unit="", value=None if self.hard_session_count is None else float(self.hard_session_count)),
-            Metric(key="min_hours_between_hard", label="Minimum hours between hard sessions", unit="h", value=self.min_hours_between_hard),
-            Metric(key="finding_count", label="Plan-check findings", unit="", value=float(len(self.findings))),
+            _metric(key="ctl_end", label="CTL at end of window", unit="", value=self.ctl_end),
+            _metric(key="tsb_end", label="TSB at end of window", unit="", value=self.tsb_end),
+            _metric(key="peak_ctl_ramp_per_week", label="Peak weekly CTL ramp", unit="/wk", value=self.peak_ctl_ramp_per_week),
+            _metric(key="days_below_tsb_threshold", label=f"Days with TSB below {SUSTAINED_LOW_TSB_THRESHOLD:.0f}", unit="days", value=self.days_below_tsb_threshold),
+            _metric(key="mean_weekly_monotony", label="Mean weekly monotony", unit="", value=self.mean_weekly_monotony),
+            _metric(key="total_hours", label="Total planned hours", unit="h", value=self.total_hours),
+            _metric(key="hard_session_count", label="Hard sessions", unit="", value=self.hard_session_count),
+            _metric(key="min_hours_between_hard", label="Minimum hours between hard sessions", unit="h", value=self.min_hours_between_hard),
+            _metric(key="finding_count", label="Plan-check findings", unit="", value=len(self.findings)),
         ]
         for event in self.event_metrics:
-            rows.append(Metric(key=f"ctl_on:{event.name}", label=f"CTL on {event.name}", unit="", value=event.ctl))
-            rows.append(Metric(key=f"tsb_on:{event.name}", label=f"TSB on {event.name}", unit="", value=event.tsb))
+            rows.append(_metric(key=f"ctl_on:{event.name}", label=f"CTL on {event.name}", unit="", value=event.ctl))
+            rows.append(_metric(key=f"tsb_on:{event.name}", label=f"TSB on {event.name}", unit="", value=event.tsb))
         return rows
 
     def to_summary(self) -> dict:
-        """JSON-friendly view without the daily series."""
-        return self.model_dump(mode="json", exclude={"series"})
+        """JSON-friendly, rounded view without the daily series and loads."""
+        out = self.model_dump(mode="json", exclude={"series", "daily_loads"})
+        for key in ("ctl_start", "ctl_end", "tsb_end", "peak_ctl_ramp_per_week", "total_hours", "min_hours_between_hard"):
+            out[key] = _round_opt(out[key], 1)
+        out["mean_weekly_monotony"] = _round_opt(out["mean_weekly_monotony"], 2)
+        for week in out["weeks"]:
+            for key in ("hours", "load_tss", "ctl_target"):
+                week[key] = _round_opt(week[key], 1)
+        for event in out["event_metrics"]:
+            event["ctl"], event["tsb"] = round(event["ctl"], 1), round(event["tsb"], 1)
+        return out
 
 
 # --- projection ---------------------------------------------------------------------
@@ -395,32 +598,6 @@ def _event_metrics(series: list[tuple[date, float, float, float]], events: list[
     return metrics, notes
 
 
-def _peak_weekly_ramp(series: list[tuple[date, float, float, float]], current_ctl: float) -> float | None:
-    """Largest CTL gain across consecutive full 7-day blocks, the first measured from `current_ctl`."""
-    ends = [series[i][1] for i in range(6, len(series), 7)]
-    if not ends:
-        return None
-    return max(b - a for a, b in zip([current_ctl, *ends], ends))
-
-
-def _mean_weekly_monotony(weeks: list[MacroWeek], loads: dict[date, float], ctx: _Inputs) -> float | None:
-    values: list[float] = []
-    for week in weeks:
-        days = [week.week_start + timedelta(days=i) for i in range(7)]
-        if days[0] < ctx.start or days[-1] > ctx.end:
-            continue
-        m = monotony({d: loads.get(d, 0.0) for d in days})
-        if m is not None:
-            values.append(m)
-    return statistics.mean(values) if values else None
-
-
-def _min_hours_between(hard_days: list[date]) -> float | None:
-    if len(hard_days) < 2:
-        return None
-    return min((b - a).days for a, b in zip(hard_days, hard_days[1:])) * HOURS_PER_DAY
-
-
 def _with_ctl_targets(weeks: list[MacroWeek], series: list[tuple[date, float, float, float]]) -> list[MacroWeek]:
     """Fill `ctl_target` with the projected CTL at each week's last projected day so the
     ramp check reads the projection rather than nothing."""
@@ -450,7 +627,7 @@ def _common_assumptions(ctx: _Inputs) -> list[str]:
     notes = [
         "Weeks start on Monday; days before the start date are not projected.",
         "Race and event loads are not added; load comes only from the planned hours.",
-        "Plan-check findings come from check_macro, which projects each week's load spread evenly over 7 days, so its TSB-based findings can differ slightly from the daily-placed series here.",
+        "Plan-check findings come from check_macro over the whole authored or scenario range, and it projects each week's load spread evenly over 7 days, so its TSB-based findings can differ slightly from the daily-placed series here.",
     ]
     if ctx.current_atl is None:
         notes.append("Current ATL was not supplied, so TSB is assumed to be 0 at the start.")
@@ -465,29 +642,39 @@ def _assemble(
     plan: MacroPlan,
     ctx: _Inputs,
     assumptions: list[str],
+    coverage_end: date,
 ) -> ScenarioProjection:
-    series = _project_ctl_atl_tsb(ctx.current_ctl, loads, ctx.start, ctx.end, current_atl=ctx.current_atl)
+    """Project from `ctx.start` through `coverage_end` (the last day with real data) and
+    derive every metric over that range."""
+    series = _project_ctl_atl_tsb(ctx.current_ctl, loads, ctx.start, coverage_end, current_atl=ctx.current_atl)
     events, event_notes = _event_metrics(series, ctx.events)
     report = _run_check(plan, ctx)
-    in_range = [d for d in (hard_days or []) if ctx.start <= d <= ctx.end]
+    cap = _ramp_cap(ctx.athlete, ctx.today)
+    fields = _derive(series, weeks, loads, hard_days, ctx.current_ctl, cap, _Window(ctx.start, coverage_end))
     return ScenarioProjection(
         name=name,
-        weeks=weeks,
-        series=series,
-        ctl_end=series[-1][1],
-        tsb_end=series[-1][3],
+        coverage_end=coverage_end,
+        ramp_cap_per_week=cap,
+        daily_loads=loads,
+        hard_days=hard_days,
+        event_names={str(e.id): e.name for e in ctx.events},
         event_metrics=events,
-        peak_ctl_ramp_per_week=_peak_weekly_ramp(series, ctx.current_ctl),
-        days_below_tsb_threshold=sum(1 for *_x, tsb in series if tsb < SUSTAINED_LOW_TSB_THRESHOLD),
-        mean_weekly_monotony=_mean_weekly_monotony(weeks, loads, ctx),
-        total_hours=sum(w.hours or 0.0 for w in weeks),
-        hard_session_count=None if hard_days is None else len(in_range),
-        min_hours_between_hard=None if hard_days is None else _min_hours_between(in_range),
         verdict=report.verdict,
         findings=report.findings,
         goal_findings=[f for f in report.findings if f.id == "goal-reality-check"],
         assumptions=[*assumptions, *_common_assumptions(ctx), *event_notes],
+        **fields,
     )
+
+
+def _untapered_event_notes(scenario: TrainingScenario, events: list[Event], start: date, end: date) -> list[str]:
+    if scenario.taper_weeks:
+        return []
+    return [
+        f"No taper applied before {e.name} on {e.event_date.isoformat()}; race-day TSB reflects training straight through."
+        for e in sorted((e for e in events if e.active), key=lambda e: e.event_date)
+        if start <= e.event_date <= end
+    ]
 
 
 def project_scenario(
@@ -508,7 +695,7 @@ def project_scenario(
 ) -> ScenarioProjection:
     """Project `scenario` from `start` to `end`. Easy/hard load per hour default to the
     blended `recent_tss_per_hour` (recorded in `assumptions`). `architecture` is free text a
-    stated goal is read from, so `goal_findings` can fire."""
+    stated goal is read from, so `goal_findings` can fire. No taper is added around events."""
     ctx = _Inputs(athlete, current_ctl, current_atl, start, end, events, recent_weekly_hours, recent_tss_per_hour, today)
     easy, hard, assumptions = _resolve_rates(tss_per_hour_easy, tss_per_hour_hard, recent_tss_per_hour)
     weeks = scenario_weeks(
@@ -522,12 +709,13 @@ def project_scenario(
         assumptions.append("Hard sessions were capped at days_per_week - 1: none sits on the long-session day.")
     assumptions.append("Hard-session count per week is unchanged in recovery and taper weeks; only hours shrink.")
     assumptions.append("ctl_target on each scenario week is filled from this projection, so the ramp check reads the projected CTL.")
+    assumptions.extend(_untapered_event_notes(scenario, events, start, end))
     event_id = next((e.id for e in events if e.active), athlete.id)
     plan = MacroPlan(
         id=uuid.uuid5(_NAMESPACE, scenario.name), athlete_id=athlete.id, event_id=event_id,
         weeks=weeks, architecture=architecture,
     )
-    return _assemble(scenario.name, weeks, loads, scenario_hard_days(scenario, weeks), plan, ctx, assumptions)
+    return _assemble(scenario.name, weeks, loads, scenario_hard_days(scenario, weeks), plan, ctx, assumptions, end)
 
 
 def project_macro(
@@ -545,12 +733,18 @@ def project_macro(
     name: str = "Current plan",
 ) -> ScenarioProjection:
     """Project an authored macro the way `check_macro` does (each week's load spread evenly
-    over its 7 days), so it can be compared beside hypothetical scenarios."""
+    over its 7 days), from `start` and the supplied current CTL/ATL, through the earlier of
+    `end` and the last authored week. Weeks before `start` are not projected, and nothing
+    after the last authored week is treated as training, so `coverage_end` is the last
+    authored day. `check_macro` still reads the whole macro."""
     weeks = sorted(macro.weeks, key=lambda w: w.week_start)
     if not weeks:
         raise ValueError("macro plan has no weeks to project")
-    end = end or weeks[-1].week_start + timedelta(days=6)
-    ctx = _Inputs(athlete, current_ctl, current_atl, start, end, events, recent_weekly_hours, recent_tss_per_hour, today)
+    authored_end = weeks[-1].week_start + timedelta(days=6)
+    if authored_end < start:
+        raise ValueError(f"macro plan ends {authored_end.isoformat()}, before the start date {start.isoformat()}")
+    coverage_end = min(end or authored_end, authored_end)
+    ctx = _Inputs(athlete, current_ctl, current_atl, start, coverage_end, events, recent_weekly_hours, recent_tss_per_hour, today)
     loads, estimated, unresolved = _spread_weekly_tss_to_daily(weeks, recent_tss_per_hour)
     assumptions = [
         "Each authored week's load is spread evenly over its 7 days, so hard-session count, spacing and monotony are not available for an authored macro.",
@@ -559,29 +753,36 @@ def project_macro(
         assumptions.append(f"{len(estimated)} week(s) had hours but no load_tss and use hours x recent load per hour.")
     if unresolved:
         assumptions.append(f"{len(unresolved)} week(s) have neither load_tss nor a usable hours estimate and project as no load.")
-    return _assemble(name, weeks, loads, None, macro, ctx, assumptions)
+    return _assemble(name, weeks, loads, None, macro, ctx, assumptions, coverage_end)
 
 
 # --- comparison ---------------------------------------------------------------------
+
+MAX_FULL_PAIRING = 3
+_UUID_RE = re.compile(r"-?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 
 
 class ComparisonRow(BaseModel):
     key: str
     label: str
     unit: str
-    values: dict[str, float | None]
-    difference_vs_first: dict[str, float | None]
+    values: dict[str, int | float | None]
+    difference_vs_first: dict[str, int | float | None]
 
 
 class ScenarioComparison(BaseModel):
-    """Per-metric rows and trade-off sentences. Never ranks or names a winner."""
+    """Per-metric rows and trade-off sentences over one common window. Never ranks or
+    names a winner."""
 
     names: list[str]
+    window: tuple[date, date]
     rows: list[ComparisonRow]
     tradeoffs: list[str]
     limits: list[str]
     findings: dict[str, list[str]]
+    flags: dict[str, list[str]]
     assumptions: dict[str, list[str]]
+    notes: list[str]
 
 
 def _rows(per_name: dict[str, list[Metric]]) -> list[ComparisonRow]:
@@ -594,7 +795,7 @@ def _rows(per_name: dict[str, list[Metric]]) -> list[ComparisonRow]:
     for key, proto in keys.items():
         values = {n: next((m.value for m in per_name[n] if m.key == key), None) for n in names}
         base = values[names[0]]
-        diff = {n: None if v is None or base is None else v - base for n, v in values.items()}
+        diff = {n: None if v is None or base is None else _round_metric(key, v - base) for n, v in values.items()}
         rows.append(ComparisonRow(key=key, label=proto.label, unit=proto.unit, values=values, difference_vs_first=diff))
     return rows
 
@@ -612,7 +813,7 @@ def _day_count_clause(a: int, b: int) -> str:
 
 def _end_sentence(a: ScenarioProjection, b: ScenarioProjection) -> str:
     return (
-        f"{a.name} reaches CTL {a.ctl_end:.0f} vs {b.ctl_end:.0f} for {b.name} at the end of the projection, "
+        f"{a.name} reaches CTL {a.ctl_end:.0f} vs {b.ctl_end:.0f} for {b.name} at the end of the compared window ({a.coverage_end.isoformat()}), "
         f"with a peak ramp of {_fmt(a.peak_ctl_ramp_per_week, 1)}/wk vs {_fmt(b.peak_ctl_ramp_per_week, 1)}/wk "
         f"and {_day_count_clause(a.days_below_tsb_threshold, b.days_below_tsb_threshold)}."
     )
@@ -638,8 +839,17 @@ def _structure_sentence(a: ScenarioProjection, b: ScenarioProjection) -> str | N
     )
 
 
+def _readable_finding_id(finding_id: str, event_names: dict[str, str]) -> str:
+    """`race-day-tsb-<uuid>` -> `race-day-tsb (Event name)` when the event is known."""
+    def swap(match: re.Match[str]) -> str:
+        name = event_names.get(match.group(1))
+        return f" ({name})" if name else match.group(0)
+
+    return _UUID_RE.sub(swap, finding_id)
+
+
 def _finding_ids(p: ScenarioProjection) -> str:
-    return ", ".join(f.id for f in p.findings) or "none"
+    return ", ".join(_readable_finding_id(f.id, p.event_names) for f in p.findings) or "none"
 
 
 def _pair_tradeoffs(a: ScenarioProjection, b: ScenarioProjection) -> list[str]:
@@ -647,27 +857,58 @@ def _pair_tradeoffs(a: ScenarioProjection, b: ScenarioProjection) -> list[str]:
     structure = _structure_sentence(a, b)
     if structure:
         sentences.append(structure)
-    sentences.append(f"{a.name} totals {a.total_hours:.0f} h over {len(a.weeks)} weeks vs {b.total_hours:.0f} h over {len(b.weeks)} weeks for {b.name}.")
+    sentences.append(
+        f"{a.name} totals {a.total_hours:.0f} h over {len(a.weeks)} weeks vs {b.total_hours:.0f} h over {len(b.weeks)} weeks for {b.name}."
+    )
     sentences.append(f"Plan-check findings: {a.name}: {_finding_ids(a)}; {b.name}: {_finding_ids(b)}.")
+    if a.flags or b.flags:
+        sentences.append(f"Flags: {a.name}: {'; '.join(a.flags) or 'none'}; {b.name}: {'; '.join(b.flags) or 'none'}.")
     return sentences
 
 
+def _pairs(projections: list[ScenarioProjection]) -> list[tuple[ScenarioProjection, ScenarioProjection]]:
+    if len(projections) <= MAX_FULL_PAIRING:
+        return list(itertools.combinations(projections, 2))
+    return [(projections[0], other) for other in projections[1:]]
+
+
+def _window_notes(p: ScenarioProjection, window: _Window, everyone: list[ScenarioProjection]) -> list[str]:
+    notes: list[str] = []
+    if p.coverage_end == window.end and any(q.coverage_end > window.end for q in everyone):
+        notes.append(f"{p.name} is authored only to {window.end.isoformat()}; all projections are compared to that date.")
+    elif p.coverage_end > window.end:
+        notes.append(f"{p.name} is cut to {window.end.isoformat()}: every projection is compared only over the window they all cover.")
+    if p.start < window.start:
+        notes.append(f"{p.name} is compared from {window.start.isoformat()}, the latest start of any projection.")
+    return notes
+
+
 def compare_scenarios(projections: list[ScenarioProjection]) -> ScenarioComparison:
-    """Side-by-side rows (differences are against the first projection) and trade-off
-    sentences pairing the first projection with each other one."""
+    """Side-by-side rows (differences against the first projection) and trade-off sentences,
+    all over the COMMON window: latest start to earliest end of real coverage. A sentence set
+    is emitted for every pair of up to 3 projections, else each is paired with the first."""
     if len(projections) < 2:
         raise ValueError("compare_scenarios needs at least two projections")
     names = [p.name for p in projections]
     if len(set(names)) != len(names):
         raise ValueError("projection names must be unique")
-    tradeoffs = [s for other in projections[1:] for s in _pair_tradeoffs(projections[0], other)]
+    window = _Window(max(p.start for p in projections), min(p.coverage_end for p in projections))
+    if window.start > window.end:
+        raise ValueError("projections share no common window")
+    cut = [p.within(window.start, window.end, _window_notes(p, window, projections)) for p in projections]
+    notes = [f"All projections are compared over {window.start.isoformat()} to {window.end.isoformat()}."]
+    if len(cut) > MAX_FULL_PAIRING:
+        notes.append(f"Trade-off sentences pair each projection with {cut[0].name} only, because there are more than {MAX_FULL_PAIRING} projections.")
     return ScenarioComparison(
         names=names,
-        rows=_rows({p.name: p.metrics() for p in projections}),
-        tradeoffs=tradeoffs,
+        window=(window.start, window.end),
+        rows=_rows({p.name: p.metrics() for p in cut}),
+        tradeoffs=[s for a, b in _pairs(cut) for s in _pair_tradeoffs(a, b)],
         limits=list(COMPARISON_LIMITS),
-        findings={p.name: [f.id for f in p.findings] for p in projections},
-        assumptions={p.name: p.assumptions for p in projections},
+        findings={p.name: [f.id for f in p.findings] for p in cut},
+        flags={p.name: p.flags for p in cut},
+        assumptions={p.name: p.assumptions for p in cut},
+        notes=notes,
     )
 
 
@@ -690,14 +931,14 @@ class SequenceResult(BaseModel):
     def metrics(self) -> list[Metric]:
         lowest = min(self.hard_morning_tsb.values(), default=None)
         return [
-            Metric(key="min_hours_between_hard", label="Minimum hours between hard sessions", unit="h", value=self.min_hours_between_hard),
-            Metric(key="back_to_back_hard_pairs", label="Hard sessions on consecutive days", unit="", value=float(self.back_to_back_hard_pairs)),
-            Metric(key="lowest_hard_morning_tsb", label="Lowest TSB on a hard-session morning", unit="", value=lowest),
-            Metric(key="longest_morning_tsb", label="TSB on the morning of the longest session", unit="", value=self.longest_morning_tsb),
-            Metric(key="strength_before_key_count", label="Strength the day before a hard or longest session", unit="", value=float(len(self.strength_before_key_dates))),
-            Metric(key="monotony", label="Weekly monotony", unit="", value=self.monotony),
-            Metric(key="end_tsb", label="TSB at end of week", unit="", value=self.end_tsb),
-            Metric(key="finding_count", label="Plan-check findings", unit="", value=float(len(self.findings))),
+            _metric(key="min_hours_between_hard", label="Minimum hours between hard sessions", unit="h", value=self.min_hours_between_hard),
+            _metric(key="back_to_back_hard_pairs", label="Hard sessions on consecutive days", unit="", value=float(self.back_to_back_hard_pairs)),
+            _metric(key="lowest_hard_morning_tsb", label="Lowest TSB on a hard-session morning", unit="", value=lowest),
+            _metric(key="longest_morning_tsb", label="TSB on the morning of the longest session", unit="", value=self.longest_morning_tsb),
+            _metric(key="strength_before_key_count", label="Strength the day before a hard or longest session", unit="", value=float(len(self.strength_before_key_dates))),
+            _metric(key="monotony", label="Weekly monotony", unit="", value=self.monotony),
+            _metric(key="end_tsb", label="TSB at end of week", unit="", value=self.end_tsb),
+            _metric(key="finding_count", label="Plan-check findings", unit="", value=float(len(self.findings))),
         ]
 
 

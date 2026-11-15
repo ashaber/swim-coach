@@ -196,8 +196,8 @@ def test_comparison_quotes_numbers_and_never_names_a_winner():
     assert any("no performance prediction" in s.lower() for s in comparison.limits)
     assert any("sleep" in s.lower() for s in comparison.limits)
     row = next(r for r in comparison.rows if r.key == "ctl_end")
-    assert row.values["A"] == pytest.approx(big.ctl_end)
-    assert row.difference_vs_first["B"] == pytest.approx(small.ctl_end - big.ctl_end)
+    assert row.values["A"] == pytest.approx(big.ctl_end, abs=0.05)
+    assert row.difference_vs_first["B"] == pytest.approx(small.ctl_end - big.ctl_end, abs=0.1)
     assert not FORBIDDEN.search(" ".join(r.label for r in comparison.rows))
 
 
@@ -439,7 +439,7 @@ def test_comparison_uses_the_common_window_and_says_so():
     row = next(r for r in comparison.rows if r.key == "ctl_end")
     assert row.values["A"] == pytest.approx(by_date[window_end], abs=0.05)
     hours = next(r for r in comparison.rows if r.key == "total_hours")
-    assert hours.values["A"] == pytest.approx(48.0, abs=0.05)  # 4 weeks of 12 h
+    assert hours.values["A"] == pytest.approx(12 * 3 + 12 * 0.7, abs=0.05)  # three builds and a recovery week
     text = " ".join(comparison.assumptions["Current plan"] + comparison.assumptions["A"] + comparison.notes)
     assert f"authored only to {window_end.isoformat()}" in text
     assert "over 4 weeks" in " ".join(comparison.tradeoffs)
