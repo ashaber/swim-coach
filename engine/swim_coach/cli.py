@@ -79,7 +79,9 @@ from swim_coach.parse_files import (
 )
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.plan_check import check_macro
-from swim_coach.progression import build_ledger, read_progression
+from swim_coach.lever_read import read_levers
+from swim_coach.progression import ProgressionRead, build_ledger
+from swim_coach.workout_builders import compile_workout
 from swim_coach.progression_check import build_progression_inputs, check_week_progression
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
@@ -632,9 +634,27 @@ def _macro_week_for(store: StoreInterface, slug: str, iso_week: str):
     return next((w for w in macro.weeks if w.week_start == monday), None) if macro else None
 
 
+def _read_json(read: ProgressionRead, athlete, compile_candidates: bool) -> dict:
+    """One read as JSON: the dose fields, the reference rung, the candidates (rung and change, plus the
+    compiled workout summary when `compile_candidates`), the rebase read and the retest flag."""
+    out = read.model_dump(mode="json", exclude={"reference"})
+    out["reference_rung"] = read.shape.describe() if read.shape else None
+    for candidate, data in zip(read.candidates, out["candidates"]):
+        if compile_candidates and candidate.shape is not None:
+            compiled = compile_workout(candidate.shape.to_intent(), athlete)
+            data["compiled"] = {
+                "duration_min": compiled.duration_min, "distance_m": compiled.distance_m,
+                "dose": compiled.dose.model_dump(mode="json") if compiled.dose else None,
+                "adjustments": compiled.adjustments,
+            }
+    return out
+
+
 def _cmd_progression(args: argparse.Namespace, store: StoreInterface) -> int:
-    """Print the athlete's per-kind progression reads, the week's stimulus review and, when that
-    week has a plan, the advisory progression findings (`swim_coach.progression_check`)."""
+    """Print the athlete's per-kind progression reads (with the lever view: reference shape, one-lever
+    candidates, threshold rebase, retest flag; `--compile` adds each candidate's built workout), the
+    week's stimulus review and, when that week has a plan, the advisory findings
+    (`swim_coach.progression_check`)."""
     slug = args.athlete
     try:
         athlete = store.load_athlete(slug)
@@ -645,18 +665,19 @@ def _cmd_progression(args: argparse.Namespace, store: StoreInterface) -> int:
     weeks = [w for w in (store.load_week(slug, i) for i in store.list_week_ids(slug)) if w is not None]
     week = next((w for w in weeks if w.iso_week == iso_week), None)
     workouts, wellness = store.list_workouts(slug), store.list_wellness(slug)
+    thresholds = store.list_threshold_records(slug)
     out: dict = {"athlete": slug, "as_of": as_of.isoformat(), "week": iso_week, "review": None, "findings": []}
     if week is None:
-        ledger = build_ledger(workouts, weeks, wellness, athlete, as_of=as_of)
-        reads = read_progression(ledger, as_of=as_of)
+        ledger = build_ledger(workouts, weeks, wellness, athlete, as_of=as_of, thresholds=thresholds)
+        reads = read_levers(ledger, athlete, as_of=as_of)
     else:
-        inputs = build_progression_inputs(workouts, weeks, wellness, athlete, week, as_of=as_of)
+        inputs = build_progression_inputs(workouts, weeks, wellness, athlete, week, as_of=as_of, thresholds=thresholds)
         reads = inputs.reads
         out["review"] = inputs.review.model_dump(mode="json") if inputs.review else None
         findings = check_week_progression(week, athlete, reads=reads, review=inputs.review, ledger=inputs.ledger,
                                           macro_week=_macro_week_for(store, slug, iso_week), as_of=as_of)
         out["findings"] = [f.model_dump(mode="json") for f in findings]
-    out["reads"] = [r.model_dump(mode="json") for r in reads]
+    out["reads"] = [_read_json(r, athlete, args.compile) for r in reads]
     print(json.dumps(out))
     return 0
 
@@ -1858,6 +1879,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_progression.add_argument("--athlete", required=True)
     p_progression.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
     p_progression.add_argument("--week", help="ISO week YYYY-Wnn, default the week of --as-of")
+    p_progression.add_argument("--compile", action="store_true",
+                               help="include each candidate's compiled workout summary (duration, dose, adjustments)")
 
     p_parse_coach_text = subparsers.add_parser(
         "parse-coach-text",

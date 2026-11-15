@@ -519,3 +519,40 @@ class TestLeverFindings:
         reads = read_levers([record], athlete, as_of=AS_OF)
         found = check_week_progression(week([past]), ATHLETE, reads=reads, ledger=[record], as_of=AS_OF)
         assert found == []
+
+
+def cli_lever_store(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    from swim_coach.models import IntervalEffort, ThresholdRecord, Workout, WorkoutAnalytics, WorkoutIntervals
+    from swim_coach.store import FileStore
+
+    store = FileStore(base_dir=tmp_path)
+    store.save_athlete(ATHLETE.model_copy(update={"slug": "cliath", "ftp_watts": 262.0}))
+    iv = WorkoutIntervals(efforts_detected=3, detection_basis="power", reps_completed=3, reps_in_band_pct=100.0, efforts=[
+        IntervalEffort(n=i + 1, start_s=600 + i * 900, duration_s=600, avg_w=250, verdict="ok") for i in range(3)])
+    store.save_workout("cliath", Workout(id=uuid.uuid4(), athlete_id=AID, date=date(2026, 11, 3), sport="bike", source="fit",
+                                         distance_m=0, duration_min=60, analytics=WorkoutAnalytics(intervals=iv)))
+    store.save_threshold_record("cliath", ThresholdRecord(
+        id=uuid.uuid4(), athlete_id=AID, sport="bike", metric="ftp_watts", value=250.0,
+        measured_at=date(2026, 10, 1), source="ramp_test"))
+
+
+def test_cli_progression_prints_shape_candidates_rebase_and_retest_flag(tmp_path, capsys, monkeypatch):
+    cli_lever_store(tmp_path, monkeypatch)
+    assert main(["--base-dir", str(tmp_path), "progression", "--athlete", "cliath", "--as-of", AS_OF.isoformat()]) == 0
+    read = json.loads(capsys.readouterr().out.strip())["reads"][0]
+    assert read["reference_rung"] == "3x10 min/5 min Z4"
+    assert read["rebase"]["rebased"] is True and "FTP rose 5% (250 -> 262 W)" in read["rebase"]["reason"]
+    assert [c["direction"] for c in read["candidates"]] == ["rebase"] and read["candidates"][0]["rung"]
+    assert read["retest_suggested"] is False and read["at_ceiling"] is False
+    assert all("compiled" not in c for c in read["candidates"])
+
+
+def test_cli_progression_compile_adds_the_built_workout_to_each_candidate(tmp_path, capsys, monkeypatch):
+    cli_lever_store(tmp_path, monkeypatch)
+    args = ["--base-dir", str(tmp_path), "progression", "--athlete", "cliath", "--as-of", AS_OF.isoformat(), "--compile"]
+    assert main(args) == 0
+    cand = json.loads(capsys.readouterr().out.strip())["reads"][0]["candidates"][0]
+    assert cand["compiled"]["adjustments"] == [] and cand["compiled"]["duration_min"] > 0
+    assert cand["compiled"]["dose"]["work_s"] == pytest.approx(cand["shape"]["reps"] * cand["shape"]["rep_size"] * cand["shape"]["sets"], rel=0.02)
