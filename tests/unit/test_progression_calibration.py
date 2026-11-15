@@ -406,7 +406,7 @@ def power_workout(day, minutes=60.0):
 def test_j_done_and_planned_load_are_on_one_scale():
     sessions = [bike_session(MON + timedelta(days=i), zone="Z3", minutes=60) for i in range(6)]
     done = [power_workout(MON + timedelta(days=i)) for i in range(3)]
-    r = week_stimulus_review(week(sessions), done, ATHLETE, [], as_of=MON + timedelta(days=2, hours=12) if False else MON + timedelta(days=2))
+    r = week_stimulus_review(week(sessions), done, ATHLETE, [], as_of=MON + timedelta(days=2))
     assert r.load_comparable is True
     assert r.done_load_au == pytest.approx(r.planned_load_au / 2)
     assert not [i for i in r.impacts if i.impact == "load_over_target"]
