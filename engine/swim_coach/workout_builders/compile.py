@@ -100,9 +100,9 @@ def compile_workout(intent: WorkoutIntent, athlete: Athlete) -> CompiledWorkout:
     adjustments += _unused_field_notes(intent, builder)
     adjustments += _total_notes(intent, builder, minutes, metres)
     dose = measure_dose(result.structure, result.intensity, minutes, metres, intent.sport, athlete)
-    if dose is None or not builder.delivers(dose.kind):
+    if dose is None or not builder.delivers(dose.kind, intent):
         adjustments.append(
-            f"{builder.archetype} declares {builder.kind} but the compiled workout measures "
+            f"{builder.archetype} declares {builder.kind_of(intent)} but the compiled workout measures "
             f"{dose.kind if dose else 'no stimulus'}"
         )
     return CompiledWorkout(

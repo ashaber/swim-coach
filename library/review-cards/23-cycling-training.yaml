@@ -55,4 +55,4 @@ cards:
   heading: 'Workout compiler: explicit-reps ranges'
   summary: 'Explicit bike reps, rep length and rest compile exactly inside wide coach-judgment ranges (threshold 1-6 reps of 5-30 min); any change is recorded.'
   recommendation: 'Tell the coach when a request was clamped and say the ranges are unvalidated coach judgment.'
-  content_hash: 971c9982f44cbd3447f31e429ef8d0af36fc9b94a7700f81ee3bea59586d5e9d
+  content_hash: be2f21c2c8686274dec218e6bb7bee8dbb6a925c84a7d5b1543cea5e8af870d0

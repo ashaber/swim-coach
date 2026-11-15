@@ -16,6 +16,9 @@ from swim_coach.models import Athlete, WorkoutStructure
 from swim_coach.stimulus import PROFILES, StimulusKind, profile_for
 from swim_coach.workout_builders.intent import WorkoutIntent
 
+# The stimulus kind of a work zone (stimulus.KIND_RANK reversed): what a zone-neutral builder delivers.
+ZONE_KINDS: dict[str, StimulusKind] = {"Z3": "tempo", "Z4": "threshold", "Z5": "vo2"}
+
 # Kinds that differ only by size: stimulus.classify_kind calls an all-easy session "long" once its work
 # passes the profile's long threshold, so a builder declaring either delivers either.
 KIND_FAMILIES: tuple[frozenset[str], ...] = (frozenset({"endurance", "long"}),)
@@ -66,12 +69,20 @@ class WorkoutBuilder:
     sports: frozenset[str]
     params: dict[str, ParamRange] = field(default_factory=dict)
     fn: Callable[[WorkoutIntent, Athlete], BuildResult] = field(default=None, repr=False)  # type: ignore[assignment]
+    kind_for: Callable[[WorkoutIntent], StimulusKind] | None = field(default=None, repr=False)
+    rung: bool = False  # the zone-neutral reps x size builder `parse_rung` targets for this sport group
+    rest_defaults: Callable[[WorkoutIntent], tuple[float, float | None]] | None = field(default=None, repr=False)
 
     def build(self, intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
         return self.fn(intent, athlete)
 
-    def delivers(self, measured_kind: str | None) -> bool:
-        return measured_kind == self.kind or any({self.kind, measured_kind} <= f for f in KIND_FAMILIES)
+    def kind_of(self, intent: WorkoutIntent) -> StimulusKind:
+        """The kind this builder delivers for `intent` (`kind` unless the builder derives it, e.g. from the zone)."""
+        return self.kind_for(intent) if self.kind_for else self.kind
+
+    def delivers(self, measured_kind: str | None, intent: WorkoutIntent | None = None) -> bool:
+        kind = self.kind_of(intent) if intent else self.kind
+        return measured_kind == kind or any({kind, measured_kind} <= f for f in KIND_FAMILIES)
 
     def as_row(self) -> dict:
         params = {

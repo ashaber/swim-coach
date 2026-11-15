@@ -12,9 +12,16 @@ from swim_coach.models import (
     WorkoutStructure,
     WorkoutTarget,
 )
-from swim_coach.stimulus import walk_leaves
+from swim_coach.stimulus import StimulusKind, walk_leaves
 from swim_coach.workout_builders.intent import WorkoutIntent
-from swim_coach.workout_builders.registry import BuildResult, ParamRange, WorkoutBuilder, register
+from swim_coach.workout_builders.registry import (
+    ZONE_KINDS,
+    BuildResult,
+    ParamRange,
+    WorkoutBuilder,
+    register,
+)
+from swim_coach.workout_builders.rung import format_duration, format_rung
 from swim_coach.zones import bike_zone_table
 
 BIKE_WARMUP_COOLDOWN_MIN = 5.0
@@ -1231,6 +1238,9 @@ def _reps_explicit(
     work_s = rep_rng.clamp("rep_duration_s", intent.rep_duration_s or work_default, adj)
     rest_s = BIKE_LONG_REST_S_RANGE.clamp("rest_s", intent.rest_s if intent.rest_s is not None else rest_default, adj)
     label, work_label = _MAIN_LABELS[archetype]
+    if archetype == "sustained_threshold" and zone != "Z4":
+        name = _ZONE_KIND_NAMES[zone]
+        label, work_label = f"{name.lower()} intervals", f"{name} interval"
     if intent.reps is not None:
         reps = int(reps_rng.clamp("reps", intent.reps, adj))
         return _bike_reps_with_rest_main(
@@ -1390,6 +1400,98 @@ def _fixed_builder(
     return build
 
 
+# --- steady_intervals: the zone-neutral reps x work / rest builder (progression rungs) -------------
+#
+# Coach judgment (library/23-cycling-training.md, "Workout compiler: explicit-reps ranges"). Reps go
+# down to 10 s so one builder also compiles short on/off VO2 work (15/15 up to 40/20, any reps or
+# sets); it is the canonical builder for `parse_rung`. `short_short_vo2` stays the library-shaped
+# auto-fit session (10 x 30/15 sets).
+BIKE_STEADY_REPS_RANGE = ParamRange(1, 60, "reps per set")
+BIKE_STEADY_SETS_RANGE = ParamRange(1, 10, "sets")
+BIKE_STEADY_REP_S_RANGE = ParamRange(10, 3600, "seconds")
+BIKE_STEADY_REST_S_RANGE = ParamRange(0, 900, "seconds")
+BIKE_STEADY_SET_REST_S_RANGE = ParamRange(0, 1800, "seconds, total recovery between sets")
+# Default rest is 1:1 with the work, capped at the sustained-threshold rest (race-pace uses 1:1,
+# sustained threshold 4 min); default total recovery between sets is the short-short set rest.
+_STEADY_REST_CAP_S = BIKE_SUSTAINED_THRESHOLD_REST_S
+_ZONE_KIND_NAMES = {"Z3": "Tempo", "Z4": "Threshold", "Z5": "VO2"}
+
+
+def _zone_rank_in_range(intent: WorkoutIntent) -> str:
+    rank = int(intent.target_zone[1:]) if intent.target_zone else 4
+    return f"Z{int(BIKE_THRESHOLD_ZONE_RANGE.lo if rank < 3 else min(rank, BIKE_THRESHOLD_ZONE_RANGE.hi))}"
+
+
+def _zone_kind(intent: WorkoutIntent) -> StimulusKind:
+    return ZONE_KINDS[_zone_rank_in_range(intent)]
+
+
+def _steady_rest_defaults(intent: WorkoutIntent) -> tuple[float, float | None]:
+    work = intent.rep_duration_s or BIKE_SUSTAINED_THRESHOLD_WORK_S
+    rest = intent.rest_s if intent.rest_s is not None else min(_STEADY_REST_CAP_S, work)
+    set_rest = intent.set_rest_s if intent.set_rest_s is not None else BIKE_SHORT_SHORT_SET_REST_S
+    return rest, set_rest
+
+
+def _steady_set(zone: str, reps: int, work_s: float, rest_s: float, ftp: float | None) -> WorkoutRepeat:
+    name = _ZONE_KIND_NAMES[zone]
+    steps = [_bike_step(f"{name} interval", "interval", work_s, zone, ftp)]
+    if rest_s > 0:
+        steps.append(_bike_step("Recovery between reps", "recovery", rest_s, "Z1", ftp))
+    return WorkoutRepeat(repeat_mode="count", count=reps, steps=steps)
+
+
+def _steady_main(
+    zone: str, sets: int, reps: int, work_s: float, rest_s: float, set_rest_s: float, ftp: float | None
+) -> list[WorkoutStepOrRepeat]:
+    """`sets` flat sibling repeats; between sets only the rest beyond the in-set rest, none after the last."""
+    text = format_rung(sets, reps, format_duration(work_s), rest_s, set_rest_s, zone)
+    items: list[WorkoutStepOrRepeat] = [
+        _bike_open_header(f"Main set: {_ZONE_KIND_NAMES[zone].lower()} intervals — {text}")
+    ]
+    for index in range(sets):
+        items.append(_steady_set(zone, reps, work_s, rest_s, ftp))
+        gap = set_rest_s - rest_s
+        if index < sets - 1 and gap > 0:
+            items.append(_bike_step("Recovery between sets", "recovery", gap, "Z1", ftp))
+    return items
+
+
+def _steady_reps(
+    intent: WorkoutIntent, main_s: float | None, sets: int, work_s: float, rest_s: float, set_rest_s: float,
+    adj: list[str],
+) -> int:
+    if intent.reps is not None:
+        return int(BIKE_STEADY_REPS_RANGE.clamp("reps", intent.reps, adj))
+    if main_s is None:
+        raise ValueError("bike archetype 'steady_intervals' needs reps, or a total_duration_min to fit them to")
+    gaps = (sets - 1) * max(0.0, set_rest_s - rest_s)
+    fitted = int((main_s - gaps) // (sets * (work_s + rest_s)))
+    return int(BIKE_STEADY_REPS_RANGE.clamp("reps", max(1, fitted), []))
+
+
+def _build_steady(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
+    adj: list[str] = []
+    ftp = athlete.ftp_watts
+    zone = _zone_rank_in_range(intent)
+    if intent.target_zone and zone != intent.target_zone:
+        adj.append(f"asked target_zone={intent.target_zone}; built {zone} (builder range Z3-Z5)")
+    work_s = BIKE_STEADY_REP_S_RANGE.clamp("rep_duration_s", intent.rep_duration_s or BIKE_SUSTAINED_THRESHOLD_WORK_S, adj)
+    rest_in, set_rest_in = _steady_rest_defaults(intent.model_copy(update={"rep_duration_s": work_s}))
+    rest_s = BIKE_STEADY_REST_S_RANGE.clamp("rest_s", rest_in, adj)
+    sets = int(BIKE_STEADY_SETS_RANGE.clamp("sets", intent.sets or 1, adj))
+    set_rest_s = BIKE_STEADY_SET_REST_S_RANGE.clamp("set_rest_s", set_rest_in, adj)
+    if sets > 1 and set_rest_s < rest_s:
+        adj.append(f"set_rest_s={set_rest_s:g} is below rest_s={rest_s:g}; sets follow the in-set rest directly")
+    asked = None
+    if intent.total_duration_min:
+        asked = BIKE_TOTAL_MIN_RANGE.clamp("total_duration_min", intent.total_duration_min, adj)
+    reps = _steady_reps(intent, _main_seconds_for(asked), sets, work_s, rest_s, set_rest_s, adj)
+    main = _steady_main(zone, sets, reps, work_s, rest_s, set_rest_s, ftp)
+    structure = _assemble_session(main, asked, ftp, adj)
+    return BuildResult(structure=structure, intensity=_bike_intensity(zone, ftp), adjustments=adj)
+
+
 _BIKE = frozenset({"bike"})
 _TOTAL = {"total_duration_min": BIKE_TOTAL_MIN_RANGE}
 _HARD_SPECS: tuple[tuple[str, str, str, dict[str, ParamRange]], ...] = (
@@ -1461,7 +1563,24 @@ _FIXED_SPECS = (
 
 def _register_bike_builders() -> None:
     for arch, kind, summary, params in _HARD_SPECS:
-        register(WorkoutBuilder("bike", arch, kind, summary, _BIKE, params, _build_hard))
+        kind_for = _zone_kind if arch == "sustained_threshold" else None
+        register(WorkoutBuilder("bike", arch, kind, summary, _BIKE, params, _build_hard, kind_for))
+    steady_params = {
+        **_TOTAL,
+        "sets": BIKE_STEADY_SETS_RANGE,
+        "reps": BIKE_STEADY_REPS_RANGE,
+        "rep_duration_s": BIKE_STEADY_REP_S_RANGE,
+        "rest_s": BIKE_STEADY_REST_S_RANGE,
+        "set_rest_s": BIKE_STEADY_SET_REST_S_RANGE,
+        "target_zone": BIKE_THRESHOLD_ZONE_RANGE,
+    }
+    register(
+        WorkoutBuilder(
+            "bike", "steady_intervals", "threshold",
+            "Any sets x reps x work / rest at Z3 (tempo), Z4 (threshold) or Z5 (VO2); also short on/off VO2 work.",
+            _BIKE, steady_params, _build_steady, _zone_kind, True, _steady_rest_defaults,
+        )
+    )
     endurance_params = {**_TOTAL, "target_zone": BIKE_ENDURANCE_ZONE_RANGE}
     summary = "Flat easy ride (default Z2) with warm-up and cool-down."
     register(WorkoutBuilder("bike", "endurance", "endurance", summary, _BIKE, endurance_params, _build_endurance))

@@ -51,4 +51,4 @@ cards:
   heading: 'Workout compiler: explicit-reps ranges'
   summary: 'Explicit CSS sets compile inside wide coach-judgment ranges (reps 1-40, 25-1600 m, rest 0-300 s, default 20 s); any change is recorded.'
   recommendation: 'Tell the coach when a request was clamped and say the ranges are unvalidated coach judgment.'
-  content_hash: 97a7050bf6e5ed314b76efc828c804ee58db784a7d7027c4cd8542255a52981a
+  content_hash: 53e85d6a2cd7969d1576df1e361e6fa62a68287feceab6ba26bc47d1e89c88da

@@ -16,6 +16,7 @@ SIZE_FIELDS = (
     "rep_duration_s",
     "rep_distance_m",
     "rest_s",
+    "set_rest_s",
     "sets",
     "target_zone",
 )
@@ -35,6 +36,7 @@ class WorkoutIntent(BaseModel):
     rep_duration_s: float | None = Field(default=None, gt=0)
     rep_distance_m: int | None = Field(default=None, gt=0)
     rest_s: float | None = Field(default=None, ge=0)
+    set_rest_s: float | None = Field(default=None, ge=0)  # total recovery between sets
     sets: int | None = Field(default=None, gt=0)
     target_zone: Zone | None = None
     indoor: bool | None = None

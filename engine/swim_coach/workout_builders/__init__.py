@@ -3,6 +3,7 @@
 from swim_coach.workout_builders import bike, swim  # noqa: F401  (registers the builders)
 from swim_coach.workout_builders.compile import CompiledWorkout, compile_workout
 from swim_coach.workout_builders.intent import WorkoutIntent
+from swim_coach.workout_builders.rung import describe_rung, parse_rung
 from swim_coach.workout_builders.registry import (
     BuildResult,
     ParamRange,
@@ -21,6 +22,8 @@ __all__ = [
     "WorkoutBuilder",
     "WorkoutIntent",
     "builders_for",
+    "describe_rung",
+    "parse_rung",
     "compile_workout",
     "get_builder",
     "list_archetypes",

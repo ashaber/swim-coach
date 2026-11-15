@@ -11,7 +11,14 @@ from swim_coach.ow_session_templates import build_ow_session, list_ow_session_te
 from swim_coach.stimulus import StimulusKind, profile_for
 from swim_coach.workout_builders.compile import measure_dose, structure_totals
 from swim_coach.workout_builders.intent import WorkoutIntent
-from swim_coach.workout_builders.registry import BuildResult, ParamRange, WorkoutBuilder, register, register_loader
+from swim_coach.workout_builders.registry import (
+    ZONE_KINDS,
+    BuildResult,
+    ParamRange,
+    WorkoutBuilder,
+    register,
+    register_loader,
+)
 from swim_coach.workout_templates import (
     TemplatePreference,
     build_main_set_step,
@@ -280,12 +287,45 @@ def _ow_builder(template_id: str) -> Callable[[WorkoutIntent, Athlete], BuildRes
     return build
 
 
+SWIM_SETS_RANGE = ParamRange(1, 10, "sets")
+SWIM_SET_REST_S_RANGE = ParamRange(0, 900, "seconds, total recovery between sets")
+SWIM_INTERVAL_ZONE_RANGE = ParamRange(3, 5, "Z3-Z5")
+# Coach judgment (library/14-swim-set-structure.md, "Workout compiler: explicit-reps ranges"): no swim
+# between-set convention exists in the engine, so total recovery between sets defaults to 60 s.
+CSS_THRESHOLD_DEFAULT_SET_REST_S = 60.0
+_ZONE_NAMES = {"Z3": "tempo", "Z4": "threshold", "Z5": "VO2"}
+
+
+def _interval_zone(intent: WorkoutIntent) -> str:
+    rank = int(intent.target_zone[1:]) if intent.target_zone else int(CSS_THRESHOLD_ZONE[1:])
+    return f"Z{max(int(SWIM_INTERVAL_ZONE_RANGE.lo), min(rank, int(SWIM_INTERVAL_ZONE_RANGE.hi)))}"
+
+
+def _interval_kind(intent: WorkoutIntent) -> StimulusKind:
+    return ZONE_KINDS[_interval_zone(intent)]
+
+
+def _interval_rest_defaults(intent: WorkoutIntent) -> tuple[float, float | None]:
+    rest = intent.rest_s if intent.rest_s is not None else CSS_THRESHOLD_DEFAULT_REST_S
+    set_rest = intent.set_rest_s if intent.set_rest_s is not None else CSS_THRESHOLD_DEFAULT_SET_REST_S
+    return rest, set_rest
+
+
 def _build_css_threshold(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
     adj: list[str] = []
     css = _css_for(athlete, adj)
+    zone = _interval_zone(intent)
+    if intent.target_zone and zone != intent.target_zone:
+        adj.append(f"asked target_zone={intent.target_zone}; built {zone} (builder range Z3-Z5)")
     total = _size_distance(intent, css, SWIM_POOL_DISTANCE_RANGE, adj)
-    rep = int(SWIM_REP_DISTANCE_RANGE.clamp("rep_distance_m", intent.rep_distance_m or ADDITIONAL_SWIM_BUILD_BLOCK_REP_M, adj))
-    rest = SWIM_REST_S_RANGE.clamp("rest_s", intent.rest_s if intent.rest_s is not None else CSS_THRESHOLD_DEFAULT_REST_S, adj)
+    rep_in = intent.rep_distance_m or ADDITIONAL_SWIM_BUILD_BLOCK_REP_M
+    rep = int(SWIM_REP_DISTANCE_RANGE.clamp("rep_distance_m", rep_in, adj))
+    rest_in, set_rest_in = _interval_rest_defaults(intent)
+    rest = SWIM_REST_S_RANGE.clamp("rest_s", rest_in, adj)
+    sets = int(SWIM_SETS_RANGE.clamp("sets", intent.sets or 1, adj))
+    set_rest = SWIM_SET_REST_S_RANGE.clamp("set_rest_s", set_rest_in, adj)
+    if sets > 1 and set_rest < rest:
+        adj.append(f"set_rest_s={set_rest:g} is below rest_s={rest:g}; sets follow the in-set rest directly")
     warm = cool = None
     if total:
         warm = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(total * ADDITIONAL_SWIM_WARM_UP_SHARE))
@@ -293,34 +333,45 @@ def _build_css_threshold(intent: WorkoutIntent, athlete: Athlete) -> BuildResult
     if intent.reps:
         reps = int(SWIM_REPS_RANGE.clamp("reps", intent.reps, adj))
     elif total:
-        reps = int(SWIM_REPS_RANGE.clamp("reps", max(1, round((total - warm - cool) / rep)), adj))
+        reps = int(SWIM_REPS_RANGE.clamp("reps", max(1, round((total - warm - cool) / rep / sets)), adj))
     else:
         raise ValueError("swim archetype 'css_threshold' needs reps, or a total_distance_m / total_duration_min")
+    main_m = sets * reps * rep
     if warm is None:
-        warm = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(reps * rep * 0.3))
-        cool = max(ADDITIONAL_SWIM_MIN_COOL_DOWN_M, round_100(reps * rep * 0.15))
+        warm = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(main_m * 0.3))
+        cool = max(ADDITIONAL_SWIM_MIN_COOL_DOWN_M, round_100(main_m * 0.15))
     standard_cool = cool
-    cool = max(cool, (total - warm - reps * rep) if total else cool)
+    cool = max(cool, (total - warm - main_m) if total else cool)
     if cool > standard_cool:
         adj.append(f"cool-down lengthened to {cool} m (standard {standard_cool} m) so the session reaches the asked {total} m")
-    return _finish(_css_threshold_structure(warm, cool, reps, rep, rest), athlete, css, _intensity(CSS_THRESHOLD_ZONE), adj)
+    structure = _css_threshold_structure(warm, cool, sets, reps, rep, rest, set_rest, zone)
+    return _finish(structure, athlete, css, _intensity(zone), adj)
 
 
-def _css_threshold_structure(warm: int, cool: int, reps: int, rep: int, rest: float) -> WorkoutStructure:
+def _css_threshold_structure(
+    warm: int, cool: int, sets: int, reps: int, rep: int, rest: float, set_rest: float, zone: str
+) -> WorkoutStructure:
+    pace = "CSS pace (Z4)" if zone == CSS_THRESHOLD_ZONE else f"{_ZONE_NAMES[zone]} pace ({zone})"
     work = WorkoutStep(
-        label=f"{rep}m at CSS pace (Z4)", role="interval", duration_kind="distance_m", duration_value=rep,
-        target=WorkoutTarget(basis="zone", zone=CSS_THRESHOLD_ZONE), modality="swim",
+        label=f"{rep}m at {pace}", role="interval", duration_kind="distance_m", duration_value=rep,
+        target=WorkoutTarget(basis="zone", zone=zone), modality="swim",
     )
     steps: list = [work]
     if rest > 0:
         steps.append(WorkoutStep(label=f"{rest:g}s rest", role="rest", duration_kind="time_s", duration_value=rest, modality="swim"))
-    return WorkoutStructure(items=[
+    items: list = [
         WorkoutStep(label=f"{warm}m easy, building to Z2 pace.", role="warmup", duration_kind="distance_m",
                     duration_value=warm, target=WorkoutTarget(basis="zone", zone="Z2"), modality="swim"),
-        WorkoutRepeat(repeat_mode="count", count=reps, steps=steps),
-        WorkoutStep(label=f"{cool}m easy choice of stroke.", role="cooldown", duration_kind="distance_m",
-                    duration_value=cool, modality="swim"),
-    ])
+    ]
+    for index in range(sets):
+        items.append(WorkoutRepeat(repeat_mode="count", count=reps, steps=list(steps)))
+        gap = set_rest - rest
+        if index < sets - 1 and gap > 0:
+            items.append(WorkoutStep(label=f"{gap:g}s easy between sets", role="rest", duration_kind="time_s",
+                                     duration_value=gap, modality="swim"))
+    items.append(WorkoutStep(label=f"{cool}m easy choice of stroke.", role="cooldown", duration_kind="distance_m",
+                             duration_value=cool, modality="swim"))
+    return WorkoutStructure(items=items)
 
 
 def _build_swim_endurance(intent: WorkoutIntent, athlete: Athlete) -> BuildResult:
@@ -381,10 +432,12 @@ def _register_swim_builders() -> None:
                             _SWIM_BOTH, {**both, "target_zone": SWIM_ENDURANCE_ZONE_RANGE}, _build_swim_endurance))
     css_params = {
         "total_distance_m": SWIM_POOL_DISTANCE_RANGE, "total_duration_min": SWIM_TOTAL_MIN_RANGE,
-        "reps": SWIM_REPS_RANGE, "rep_distance_m": SWIM_REP_DISTANCE_RANGE, "rest_s": SWIM_REST_S_RANGE,
+        "sets": SWIM_SETS_RANGE, "reps": SWIM_REPS_RANGE, "rep_distance_m": SWIM_REP_DISTANCE_RANGE,
+        "rest_s": SWIM_REST_S_RANGE, "set_rest_s": SWIM_SET_REST_S_RANGE, "target_zone": SWIM_INTERVAL_ZONE_RANGE,
     }
-    register(WorkoutBuilder("swim", "css_threshold", "threshold", "Reps x distance at CSS pace (Z4) with timed rest.",
-                            _SWIM_POOL, css_params, _build_css_threshold))
+    summary = "Sets x reps x distance at Z3, Z4 (CSS pace, default) or Z5 with timed rest and set rest."
+    register(WorkoutBuilder("swim", "css_threshold", "threshold", summary, _SWIM_POOL, css_params, _build_css_threshold,
+                            _interval_kind, True, _interval_rest_defaults))
 
 
 _register_swim_builders()
