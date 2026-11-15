@@ -51,6 +51,7 @@ from swim_coach.workout_templates import (
     resolve_template,
 )
 from swim_coach.stimulus import intensity_is_hard
+from swim_coach.workout_builders import WorkoutIntent, compile_workout
 from swim_coach.workout_builders.swim import _additional_swim_structure_template
 from swim_coach.workout_builders.bike import (
     BIKE_INTERVAL_TEMPLATE_META,
@@ -2308,18 +2309,16 @@ def bike_session_as(session: Session, interval_type: str, ftp_watts: float | Non
     head, sep, _ = session.purpose.partition(" — ")
     if sep and not head.lower().startswith(_ENGINE_PURPOSE_STARTS):
         label = head
-    duration = max(session.duration_min, DEFAULT_BIKE_SESSION_MIN)
-    if interval_type == "endurance":
-        structured = _bike_session_structure("Z2", duration, ftp_watts)
-        zone, purpose = "Z2", "endurance ride (Z2) — aerobic base"
-    else:
-        meta = BIKE_INTERVAL_TEMPLATE_META[interval_type]
-        structured = _bike_hard_session_structure(interval_type, duration, ftp_watts)
-        zone, purpose = meta["zone"], meta["purpose"]
+    intent = WorkoutIntent(
+        sport="bike", archetype=interval_type, total_duration_min=max(session.duration_min, DEFAULT_BIKE_SESSION_MIN)
+    )
+    athlete = Athlete(id=session.athlete_id, slug="bike-session", name="bike session", ftp_watts=ftp_watts)
+    compiled = compile_workout(intent, athlete)
+    purpose = "endurance ride (Z2) — aerobic base" if interval_type == "endurance" else BIKE_INTERVAL_TEMPLATE_META[interval_type]["purpose"]
     return {
-        "intensity": _bike_intensity(zone, ftp_watts),
-        "structured": structured,
-        "structure": render_prose(structured),
+        "intensity": compiled.intensity,
+        "structured": compiled.structured,
+        "structure": compiled.prose,
         "purpose": f"{label} — {purpose}" if label else purpose,
     }
 

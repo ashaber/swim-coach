@@ -1149,7 +1149,7 @@ def _bike_intensity(zone: str, ftp_watts: float | None) -> dict:
 
 # --- registered archetypes (the workout compiler's bike builders) ----------------------------------
 #
-# Explicit-reps ranges below are Coach judgment (library/24-cycling-periodization-intervals.md,
+# Explicit-reps ranges below are Coach judgment (library/23-cycling-training.md,
 # "Workout compiler: explicit-reps ranges"): wider than the auto-fit ranges above (which stay the
 # library's 2-3 / 3-5 / 1-2 reps) because an explicit coach request may go beyond the default
 # shape, but bounded so a typo cannot compile into an unrideable session.
