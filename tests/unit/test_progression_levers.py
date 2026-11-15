@@ -380,6 +380,12 @@ def test_every_candidate_compiles_with_no_adjustments(candidate: SessionShape) -
     assert compiled.dose.work_in("s" if candidate.sport_group == "bike" else "m") == pytest.approx(candidate.work(), rel=0.02)
 
 
+@pytest.mark.parametrize("candidate", list(all_policy_candidates()), ids=lambda s: f"{s.sport_group}-{s.describe()}")
+def test_a_compiled_candidate_reads_back_as_the_same_shape(candidate: SessionShape) -> None:
+    compiled = compile_workout(candidate.to_intent(), ATHLETE)
+    assert SessionShape.from_structure(compiled.structured, ATHLETE, candidate.sport_group) == candidate
+
+
 # --- classify_move -----------------------------------------------------------------------------
 
 

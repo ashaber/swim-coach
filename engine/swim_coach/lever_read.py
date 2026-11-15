@@ -16,6 +16,7 @@ from swim_coach.progression_levers import (
     LeverPolicy,
     RebaseRead,
     SessionShape,
+    default_policy,
     is_at_ceiling,
     next_shapes,
     rebase_for_threshold_change,
@@ -85,6 +86,6 @@ def read_levers(
     """`read_progression` with the lever view added to each read whose reference session has a regular
     shape: the `shape`, one-lever `candidates`, the threshold `rebase` (applied before the candidates),
     `at_ceiling` and `retest_suggested`. Reads without a derivable shape are returned unchanged."""
-    policy = policy or LeverPolicy.load()
+    policy = policy or default_policy()
     reads = read_progression(ledger, as_of=as_of)
     return [_lever_read(read, athlete, policy) for read in reads]

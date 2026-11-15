@@ -403,3 +403,119 @@ def test_cli_progression_unknown_athlete_is_a_json_error(tmp_path, capsys, monke
     monkeypatch.delenv("STORE_BACKEND", raising=False)
     assert main(["--base-dir", str(tmp_path), "progression", "--athlete", "nobody"]) != 0
     assert "error" in json.loads(capsys.readouterr().out.strip())
+
+
+# --- lever-based findings ---------------------------------------------------------------------
+
+from lever_helpers import ROWS as LEVER_ROWS, lrec  # noqa: E402
+from lever_helpers import shape as lever_shape  # noqa: E402
+from swim_coach.lever_read import read_levers  # noqa: E402
+from swim_coach.workout_builders import compile_workout  # noqa: E402
+
+LEVER_SCENARIOS = {
+    # ref: the last clean session; the rest are planned sessions and the finding each should draw.
+    "bike": dict(ref="2x10 min/4 min Z4", multi="2x12 min/3 min Z4", big="2x20 min/4 min Z4", ok="2x12 min/4 min Z4",
+                 top="2x20 min/5 min Z4", over="3x20 min/5 min Z4", cont="2x15 min/5 min Z4", then=250.0, now=262.0,
+                 mid="2x12 min/5 min Z4", athlete=dict(ftp_watts=262.0)),
+    "swim": dict(ref="8x100 m/15 s Z4", multi="8x150 m/10 s Z4", big="8x300 m/15 s Z4", ok="8x150 m/15 s Z4",
+                 top="10x400 m/40 s Z4", over="12x400 m/40 s Z4", cont="8x300 m/15 s Z4", then=90.0, now=86.0,
+                 mid="8x200 m/15 s Z4", athlete=dict(css_pace_s_per_100m=86.0)),
+}
+
+
+def lever_session(group: str, text: str, *, day=None, title=None, kind=None):
+    row = LEVER_ROWS[group]
+    compiled = compile_workout(lever_shape(group, text).to_intent(), ATHLETE)
+    return Session(id=uuid.uuid4(), athlete_id=AID, date=day or MON + timedelta(days=2), sport=row["sport"],
+                   source="ai_coach", duration_min=compiled.duration_min, distance_m=compiled.distance_m,
+                   intensity=compiled.intensity, purpose="t", structured=compiled.structured, title=title,
+                   **({"kind": kind} if kind else {}))
+
+
+def lever_check(group: str, planned: str, ref: str | None = None, *, anchor=None, known=True, in_band=90.0,
+                extra=(), ledger=None, **kw):
+    sc = LEVER_SCENARIOS[group]
+    athlete = Athlete(id=AID, slug="t", name="T", **sc["athlete"])
+    records = [lrec(group, ref or sc["ref"], anchor=anchor, known=known, in_band=in_band)]
+    reads = read_levers(records, athlete, as_of=AS_OF)
+    sessions = [lever_session(group, planned), *extra]
+    return check_week_progression(week(sessions), ATHLETE, reads=reads, ledger=records if ledger is None else ledger, **kw)
+
+
+@pytest.mark.parametrize("group", LEVER_SCENARIOS)
+class TestLeverFindings:
+    def tag(self, group):
+        return f"{LEVER_ROWS[group]['sport'].split('_')[0]}-threshold"
+
+    def test_a_single_step_draws_nothing(self, group):
+        assert lever_check(group, LEVER_SCENARIOS[group]["ok"]) == []
+
+    def test_multi_lever(self, group):
+        found = lever_check(group, LEVER_SCENARIOS[group]["multi"])
+        assert ids(found) == [f"progression-multi-lever-{self.tag(group)}"]
+        assert found[0].severity == "medium" and found[0].category == "judgment"
+        sc = LEVER_SCENARIOS[group]
+        assert f"last clean {sc['ref']}" in found[0].evidence and f"planned {sc['multi']}" in found[0].evidence
+        assert "rest" in found[0].evidence
+        assert "Next" in found[0].fix or "->" in found[0].fix
+
+    def test_oversized_step_is_medium_and_high_after_a_poor_session(self, group):
+        sc = LEVER_SCENARIOS[group]
+        found = lever_check(group, sc["big"])
+        assert ids(found) == [f"progression-oversized-step-{self.tag(group)}"] and found[0].severity == "medium"
+        poor = lever_check(group, sc["big"], in_band=30.0)
+        assert ids(poor)[0] == f"progression-oversized-step-{self.tag(group)}" and poor[0].severity == "high"
+
+    def test_over_ceiling_cites_the_source(self, group):
+        sc = LEVER_SCENARIOS[group]
+        found = lever_check(group, sc["over"], ref=sc["top"])
+        assert ids(found) == [f"progression-over-ceiling-{self.tag(group)}"] and found[0].severity == "medium"
+        assert "Coach judgment" in found[0].evidence or "Dekerle" in found[0].evidence
+
+    def test_rebase_ignored(self, group):
+        sc = LEVER_SCENARIOS[group]
+        found = lever_check(group, sc["cont"], ref=sc["mid"], anchor=sc["then"])
+        assert ids(found) == [f"progression-threshold-rebase-{self.tag(group)}"] and found[0].severity == "medium"
+        assert "restarting" in found[0].evidence and sc["mid"] in found[0].evidence
+
+    def test_rebase_followed_is_silent(self, group):
+        sc = LEVER_SCENARIOS[group]
+        athlete = Athlete(id=AID, slug="t", name="T", **sc["athlete"])
+        record = lrec(group, sc["mid"], anchor=sc["then"])
+        restart = read_levers([record], athlete, as_of=AS_OF)[0].candidates[0].rung
+        reads = read_levers([record], athlete, as_of=AS_OF)
+        assert check_week_progression(week([lever_session(group, restart)]), ATHLETE, reads=reads, ledger=[record]) == []
+
+    def test_retest_at_the_ceiling_is_low(self, group):
+        sc = LEVER_SCENARIOS[group]
+        found = lever_check(group, sc["top"], ref=sc["top"])
+        sport = LEVER_ROWS[group]["sport"].split("_")[0]
+        assert ids(found) == [f"progression-retest-{sport}"] and found[0].severity == "low"
+
+    def test_retest_silent_when_a_test_is_planned_or_in_taper(self, group):
+        sc = LEVER_SCENARIOS[group]
+        test_day = lever_session(group, sc["top"], day=MON + timedelta(days=4), title="FTP test")
+        assert lever_check(group, sc["top"], ref=sc["top"], extra=[test_day]) == []
+        taper = MacroWeek(week_start=MON, phase="Taper 1", focus="f")
+        assert lever_check(group, sc["top"], ref=sc["top"], macro_week=taper) == []
+
+    def test_a_poor_last_session_with_no_shape_falls_back_to_the_dose_rules(self, group):
+        sc = LEVER_SCENARIOS[group]
+        athlete = Athlete(id=AID, slug="t", name="T", **sc["athlete"])
+        record = lrec(group, sc["ref"])
+        record.executed.dose = record.executed.dose.model_copy(update={"rep_sizes": None, "rest_gaps_s": None})
+        reads = read_levers([record], athlete, as_of=AS_OF)
+        assert reads[0].shape is None
+        planned = lever_session(group, sc["big"])
+        found = check_week_progression(week([planned]), ATHLETE, reads=reads, ledger=[record])
+        assert all(not i.startswith(("progression-multi-lever", "progression-oversized", "progression-over-ceiling")) for i in ids(found))
+        assert ids(found) == [f"progression-jump-{self.tag(group)}"]
+
+    def test_only_sessions_still_to_do_are_judged(self, group):
+        sc = LEVER_SCENARIOS[group]
+        past = lever_session(group, sc["big"], day=AS_OF - timedelta(days=2))
+        athlete = Athlete(id=AID, slug="t", name="T", **sc["athlete"])
+        record = lrec(group, sc["ref"])
+        reads = read_levers([record], athlete, as_of=AS_OF)
+        found = check_week_progression(week([past]), ATHLETE, reads=reads, ledger=[record], as_of=AS_OF)
+        assert found == []

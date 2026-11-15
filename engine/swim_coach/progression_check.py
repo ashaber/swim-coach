@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from swim_coach.formatting import format_amount
-from swim_coach.models import Athlete, MacroWeek, PlanCheckFinding, Session, WeekPlan, Wellness, Workout
+from swim_coach.models import Athlete, MacroWeek, PlanCheckFinding, Session, ThresholdRecord, WeekPlan, Wellness, Workout
 from swim_coach.progression import (
     PROGRESSION_STEP_FRACTION,
     ProgressionRead,
@@ -27,9 +27,11 @@ from swim_coach.progression import (
     StimulusRecord,
     WeekStimulusReview,
     build_ledger,
-    read_progression,
     week_stimulus_review,
 )
+from swim_coach.lever_read import read_levers
+from swim_coach.progression_check_levers import candidate_fix, lever_findings
+from swim_coach.progression_levers import LeverPolicy, SessionShape, default_policy
 from swim_coach.stimulus import SportProfile, StimulusDose, planned_dose, profile_for
 
 _SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
@@ -69,11 +71,13 @@ def build_progression_inputs(
     week: WeekPlan,
     *,
     as_of: date,
+    thresholds: list[ThresholdRecord] | None = None,
 ) -> ProgressionInputs:
-    """Ledger, per-kind reads and the week review in one call (pure; the caller loads the data)."""
-    ledger = build_ledger(workouts, weeks, wellness, athlete, as_of=as_of)
+    """Ledger, per-kind reads (with the lever view) and the week review in one call (pure; the caller
+    loads the data). `thresholds` dates the threshold each session was done at, for the rebase."""
+    ledger = build_ledger(workouts, weeks, wellness, athlete, as_of=as_of, thresholds=thresholds)
     return ProgressionInputs(
-        reads=read_progression(ledger, as_of=as_of),
+        reads=read_levers(ledger, athlete, as_of=as_of),
         review=week_stimulus_review(week, workouts, athlete, wellness, as_of=as_of),
         ledger=ledger,
         as_of=as_of,
@@ -115,6 +119,8 @@ def _evidence(session: Session, dose: StimulusDose, read: ProgressionRead, ledge
 
 
 def _fix(read: ProgressionRead) -> str:
+    if read.candidates:
+        return candidate_fix(read)
     low, high = read.suggested_work_range  # type: ignore[misc]  # callers guarantee a range
     text = f"Suggested work {format_amount(low, read.unit)} to {format_amount(high, read.unit)}"
     if read.suggested_longest_rep_max is not None:
@@ -142,8 +148,8 @@ def _previous_not_progressed(read: ProgressionRead, ledger: list[StimulusRecord]
     return done[-1].executed.dose.work_in(profile.unit) <= done[-2].executed.dose.work_in(profile.unit)
 
 
-def _session_findings(session: Session, dose: StimulusDose, read: ProgressionRead, profile: SportProfile,
-                      ledger: list[StimulusRecord], taper: bool) -> list[PlanCheckFinding]:
+def _dose_findings(session: Session, dose: StimulusDose, read: ProgressionRead, profile: SportProfile,
+                   ledger: list[StimulusRecord], taper: bool) -> list[PlanCheckFinding]:
     """The first four rules in priority order for one session."""
     unit, step = read.unit, PROGRESSION_STEP_FRACTION
     work, ref = dose.work_in(unit), _reference_work(read)
@@ -167,6 +173,24 @@ def _session_findings(session: Session, dose: StimulusDose, read: ProgressionRea
         out.append(_finding(f"progression-rep-length-{tag}", "low", session, dose, read, ledger,
                             "Reps much longer than the athlete has done recently are likely to fade."))
     return out
+
+
+_LEVER_PATH_KEEPS = ("progression-ignores-", "progression-stalled-")
+
+
+def _session_findings(session: Session, dose: StimulusDose, read: ProgressionRead, profile: SportProfile,
+                      ledger: list[StimulusRecord], taper: bool, *, week: WeekPlan, athlete: Athlete,
+                      policy: LeverPolicy) -> list[PlanCheckFinding]:
+    """Lever findings when the reference and planned shapes share a zone (the dose-percentage jump and
+    rep-length rules are then replaced by them; ignores and stalled still apply), else the dose rules."""
+    planned = SessionShape.from_structure(session.structured, athlete, session.sport) if session.structured else None
+    shared = planned is not None and read.shape is not None and (planned.sport_group, planned.zone) == (
+        read.shape.sport_group, read.shape.zone)
+    dose_found = _dose_findings(session, dose, read, profile, ledger, taper)
+    if not shared:
+        return dose_found
+    kept = [f for f in dose_found if f.id.startswith(_LEVER_PATH_KEEPS)]
+    return [*lever_findings(session, planned, read, policy, week=week, taper=taper), *kept]
 
 
 def _checkable_sessions(week: WeekPlan, review: WeekStimulusReview | None, as_of: date | None) -> list[Session]:
@@ -198,9 +222,11 @@ def check_week_progression(
     ledger: list[StimulusRecord] | None = None,
     macro_week: MacroWeek | None = None,
     as_of: date | None = None,
+    policy: LeverPolicy | None = None,
 ) -> list[PlanCheckFinding]:
     """Guardrail findings for one week: jump, ignores-reduce/rebuild, stalled and rep-length (one per
-    sport and kind, the most severe kept) plus an `unplanned-*` finding per remaining-session impact
+    sport and kind, the most severe kept; when the read carries a lever shape and the session has one
+    in the same zone, the lever findings of `progression_check_levers` replace jump and rep-length) plus an `unplanned-*` finding per remaining-session impact
     in `review`. `recent_longest` maps profile name to the longest recent work in its unit (default:
     derived from `ledger`). Stalled needs `ledger` and is suppressed in a taper or race week.
     `as_of`: when it falls inside or after the week, only sessions still to do are judged."""
@@ -215,7 +241,9 @@ def check_week_progression(
         read = usable.get((profile.name, dose.kind)) if profile and dose else None
         if read is None or dose is None or dose.confidence != "structured":
             continue
-        for finding in _session_findings(session, dose, read, profile, ledger, taper):
+        found = _session_findings(session, dose, read, profile, ledger, taper, week=week, athlete=athlete,
+                                  policy=policy or default_policy())
+        for finding in found:
             key = (read.sport, read.kind)
             if key not in best or _SEVERITY_RANK[finding.severity] < _SEVERITY_RANK[best[key].severity]:
                 best[key] = finding

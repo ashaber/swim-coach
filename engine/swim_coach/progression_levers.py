@@ -16,6 +16,7 @@ compares the levers as progression steps.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Sequence
 
@@ -141,6 +142,7 @@ class SessionShape(BaseModel):
     def _check_rests(self) -> "SessionShape":
         if self.sets == 1:
             self.set_rest_s = None
+            self.rest_s = self.rest_s if self.reps > 1 else 0.0  # nothing follows a lone rep
         elif self.set_rest_s is None or self.set_rest_s < self.rest_s:
             raise ValueError("a shape with several sets needs set_rest_s at or above rest_s")
         return self
@@ -488,6 +490,12 @@ class LeverPolicy(BaseModel):
 
     def rebase_rule(self, group: str, zone: str) -> RebaseRule:
         return self.zone(group, zone).rebase or self.groups[group].rebase
+
+
+@lru_cache(maxsize=1)
+def default_policy() -> LeverPolicy:
+    """The shipped policy, loaded once. Treat it as read-only; use `LeverPolicy.load(overrides=...)` to adjust."""
+    return LeverPolicy.load()
 
 
 def _merge(base: dict, patch: dict) -> dict:
