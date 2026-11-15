@@ -399,3 +399,168 @@ def test_cli_project_rejects_a_malformed_scenario(athlete_tree, capsys):
     ])
     assert code != 0
     assert "scenario" in json.loads(capsys.readouterr().out.strip())["error"].lower()
+
+
+# --- follow-up: common window, past weeks, pairing, flags, events, rounding, ids ------
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _macro_from(first_week: date, count: int, load: float = 450.0) -> MacroPlan:
+    weeks = [
+        MacroWeek(week_start=first_week + timedelta(weeks=i), phase="build", focus="x", hours=9.0, load_tss=load)
+        for i in range(count)
+    ]
+    return MacroPlan(id=uuid.uuid4(), athlete_id=uuid.uuid4(), event_id=uuid.uuid4(), weeks=weeks)
+
+
+def _macro_proj(macro: MacroPlan, end: date | None = None, **overrides):
+    kwargs = dict(
+        current_ctl=40.0, current_atl=40.0, start=START, end=end, events=[], recent_weekly_hours=[8.0],
+        recent_tss_per_hour=50.0, today=START,
+    )
+    kwargs.update(overrides)
+    return project_macro(macro, _athlete(), **kwargs)
+
+
+def test_macro_coverage_ends_at_its_last_authored_week_and_never_decays_after():
+    proj = _macro_proj(_macro_from(START, 4), end=START + timedelta(weeks=12) - timedelta(days=1))
+    assert proj.coverage_end == START + timedelta(weeks=4) - timedelta(days=1)
+    assert proj.series[-1][0] == proj.coverage_end
+
+
+def test_comparison_uses_the_common_window_and_says_so():
+    macro = _macro_proj(_macro_from(START, 4), end=START + timedelta(weeks=12) - timedelta(days=1))
+    scen = _project(_scenario("A", 5, 12.0), end=START + timedelta(weeks=12) - timedelta(days=1), events=[])
+    comparison = compare_scenarios([macro, scen])
+    window_end = macro.coverage_end
+    assert comparison.window == (START, window_end)
+    by_date = {d: ctl for d, ctl, _a, _t in scen.series}
+    row = next(r for r in comparison.rows if r.key == "ctl_end")
+    assert row.values["A"] == pytest.approx(by_date[window_end], abs=0.05)
+    hours = next(r for r in comparison.rows if r.key == "total_hours")
+    assert hours.values["A"] == pytest.approx(48.0, abs=0.05)  # 4 weeks of 12 h
+    text = " ".join(comparison.assumptions["Current plan"] + comparison.assumptions["A"] + comparison.notes)
+    assert f"authored only to {window_end.isoformat()}" in text
+    assert "over 4 weeks" in " ".join(comparison.tradeoffs)
+
+
+def test_events_after_the_common_window_are_dropped_with_a_note():
+    macro = _macro_proj(_macro_from(START, 4), end=START + timedelta(weeks=8) - timedelta(days=1))
+    late = _event(START + timedelta(weeks=7), "Late race")
+    scen = _project(_scenario("A", 5, 12.0), events=[late])
+    assert scen.event_metrics
+    comparison = compare_scenarios([macro, scen])
+    assert not any(r.key.endswith(":Late race") for r in comparison.rows)
+    assert any("Late race" in a and "dropped" in a for a in comparison.assumptions["A"])
+
+
+def test_macro_that_began_before_start_projects_only_weeks_from_start():
+    began = START - timedelta(weeks=4)
+    macro = _macro_from(began, 9)  # four past weeks, five remaining
+    proj = _macro_proj(macro, current_ctl=60.0, current_atl=60.0)
+    assert proj.weeks[0].week_start == START
+    assert len(proj.weeks) == 5
+    assert proj.total_hours == pytest.approx(45.0)
+    assert proj.series[0][0] == START
+    loads = _spread_weekly_tss_to_daily(macro.weeks, 50.0)[0]
+    expected = _project_ctl_atl_tsb(60.0, loads, START, proj.coverage_end, current_atl=60.0)
+    assert proj.series == expected
+
+
+def test_macro_entirely_in_the_past_is_an_error():
+    with pytest.raises(ValueError, match="before"):
+        _macro_proj(_macro_from(START - timedelta(weeks=6), 2))
+
+
+def _three():
+    end = START + timedelta(weeks=4) - timedelta(days=1)
+    macro = _macro_proj(_macro_from(START, 4), end=end)
+    a = _project(_scenario("A", 5, 12.0), end=end, events=[])
+    b = _project(_scenario("B", 4, 9.0), end=end, events=[])
+    return macro, a, b
+
+
+def test_three_projections_get_a_sentence_set_for_every_pair():
+    macro, a, b = _three()
+    text = compare_scenarios([macro, a, b]).tradeoffs
+    assert any(s.startswith("Current plan reaches CTL") and "for A" in s for s in text)
+    assert any(s.startswith("Current plan reaches CTL") and "for B" in s for s in text)
+    assert any(s.startswith("A reaches CTL") and "for B" in s for s in text)
+
+
+def test_more_than_three_projections_pair_with_the_first_only_and_say_so():
+    macro, a, b = _three()
+    c = _project(_scenario("C", 3, 6.0), end=macro.coverage_end, events=[])
+    comparison = compare_scenarios([macro, a, b, c])
+    assert not any(s.startswith("A reaches CTL") for s in comparison.tradeoffs)
+    assert any("more than 3" in n for n in comparison.notes)
+
+
+def test_steep_peak_ramp_is_flagged_with_the_plan_check_cap():
+    proj = _project(_scenario("Aggressive", 6, 20.0, weekly_hours_ramp=0.2), current_ctl=20.0, current_atl=20.0)
+    assert any("exceeds the 7/wk cap in week of" in f for f in proj.flags)
+    comparison = compare_scenarios([proj, _project(_scenario("B", 4, 9.0))])
+    assert comparison.flags["Aggressive"] == proj.flags
+    assert any("exceeds the 7/wk cap" in s for s in comparison.tradeoffs)
+
+
+def test_masters_athlete_uses_the_lower_ramp_cap():
+    athlete = _athlete(dob=date(1970, 1, 1))
+    proj = project_scenario(
+        _scenario("A", 6, 14.0), athlete, current_ctl=20.0, current_atl=20.0, start=START,
+        end=START + timedelta(weeks=4) - timedelta(days=1), events=[], recent_weekly_hours=[8.0],
+        recent_tss_per_hour=50.0, today=START, tss_per_hour_easy=EASY, tss_per_hour_hard=HARD,
+    )
+    assert any("5/wk cap" in f for f in proj.flags)
+
+
+def test_long_deep_tsb_is_flagged():
+    proj = _project(_scenario("Heavy", 7, 25.0), current_ctl=20.0, current_atl=20.0)
+    assert any("consecutive days" in f and "TSB below -30" in f for f in proj.flags)
+
+
+def test_untapered_scenario_notes_each_in_window_event():
+    race = START + timedelta(weeks=5)
+    proj = _project(_scenario("A", 5, 12.0), events=[_event(race, "Gran Fondo")])
+    assert any(f"No taper applied before Gran Fondo on {race.isoformat()}" in a for a in proj.assumptions)
+    tapered = _project(_scenario("A", 5, 12.0, taper_weeks=1, taper_reduction=0.4), events=[_event(race, "Gran Fondo")])
+    assert not any("No taper applied" in a for a in tapered.assumptions)
+
+
+def test_row_values_and_summaries_are_rounded_per_metric():
+    big, small = _project(_scenario("A", 5, 12.0)), _project(_scenario("B", 4, 9.0))
+    comparison = compare_scenarios([big, small])
+    counts = {"days_below_tsb_threshold", "hard_session_count", "finding_count"}
+    for row in comparison.rows:
+        digits = 2 if row.key == "mean_weekly_monotony" else 0 if row.key in counts else 1
+        for value in [*row.values.values(), *row.difference_vs_first.values()]:
+            if value is not None:
+                assert value == round(value, digits)
+    count_row = next(r for r in comparison.rows if r.key == "days_below_tsb_threshold")
+    assert all(isinstance(v, int) for v in count_row.values.values())
+    summary = big.to_summary()
+    assert summary["ctl_end"] == round(big.ctl_end, 1)
+    assert summary["weeks"][0]["hours"] == round(big.weeks[0].hours, 1)
+
+
+def test_tradeoff_sentences_show_event_names_not_uuids():
+    race = START + timedelta(weeks=7)
+    proj_a = _project(_scenario("A", 5, 12.0), events=[_event(race, "Gran Fondo")])
+    proj_b = _project(_scenario("B", 4, 9.0), events=[_event(race, "Gran Fondo")])
+    assert any(UUID_RE.search(f.id) for f in proj_a.findings)
+    comparison = compare_scenarios([proj_a, proj_b])
+    assert not UUID_RE.search(" ".join(comparison.tradeoffs))
+    assert "Gran Fondo" in " ".join(comparison.tradeoffs)
+    assert any(UUID_RE.search(i) for ids in comparison.findings.values() for i in ids)
+
+
+def test_cli_project_applies_taper_to_every_scenario(athlete_tree, capsys):
+    _seed_history(athlete_tree)
+    code = main([
+        "--base-dir", str(athlete_tree["base_dir"]), "project", "--athlete", athlete_tree["slug"],
+        "--scenario", "five:5:12", "--scenario", "four:4:9", "--weeks", "6", "--taper", "1:0.4",
+    ])
+    out = json.loads(capsys.readouterr().out.strip())
+    assert code == 0
+    assert all(p["weeks"][-1]["phase"] == "taper" for p in out["projections"])
