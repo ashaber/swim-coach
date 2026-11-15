@@ -1336,7 +1336,7 @@ def check_week(
     if progression is not None:
         findings.extend(check_week_progression(
             week, athlete, reads=progression.reads, review=progression.review,
-            ledger=progression.ledger, macro_week=macro_week))
+            ledger=progression.ledger, macro_week=macro_week, as_of=progression.as_of))
 
     findings = _rank_and_cap(findings)
     return PlanCheckReport(verdict=_verdict_from_findings(findings), findings=findings)

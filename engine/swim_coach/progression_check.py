@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from swim_coach.formatting import format_amount
 from swim_coach.models import Athlete, MacroWeek, PlanCheckFinding, Session, WeekPlan, Wellness, Workout
 from swim_coach.progression import (
     PROGRESSION_STEP_FRACTION,
@@ -25,7 +26,6 @@ from swim_coach.progression import (
     RemainingImpact,
     StimulusRecord,
     WeekStimulusReview,
-    _fmt,
     build_ledger,
     read_progression,
     week_stimulus_review,
@@ -58,6 +58,7 @@ class ProgressionInputs:
     reads: list[ProgressionRead]
     review: WeekStimulusReview | None = None
     ledger: list[StimulusRecord] = field(default_factory=list)
+    as_of: date | None = None
 
 
 def build_progression_inputs(
@@ -75,6 +76,7 @@ def build_progression_inputs(
         reads=read_progression(ledger, as_of=as_of),
         review=week_stimulus_review(week, workouts, athlete, wellness, as_of=as_of),
         ledger=ledger,
+        as_of=as_of,
     )
 
 
@@ -105,18 +107,18 @@ def _reference_work(read: ProgressionRead) -> float | None:
 def _evidence(session: Session, dose: StimulusDose, read: ProgressionRead, ledger: list[StimulusRecord]) -> str:
     unit, ref = read.unit, _reference_work(read)
     return (
-        f"Planned {_fmt(dose.work_in(unit), unit)} of {read.kind} {read.sport} on {session.date.isoformat()} "
-        f"(longest rep {_fmt(dose.longest_rep_in(unit), unit)}); last reference dose {_fmt(ref, unit)} on "
+        f"Planned {format_amount(dose.work_in(unit), unit)} of {read.kind} {read.sport} on {session.date.isoformat()} "
+        f"(longest rep {format_amount(dose.longest_rep_in(unit), unit)}); last reference dose {format_amount(ref, unit)} on "
         f"{_reference_date(read, ledger)}; verdict {read.verdict} ({read.confidence} confidence): "
-        f"{read.reasons[0] if read.reasons else 'no reason recorded'}"
+        f"{read.verdict_reason or (read.reasons[0] if read.reasons else 'no reason recorded')}"
     )
 
 
 def _fix(read: ProgressionRead) -> str:
     low, high = read.suggested_work_range  # type: ignore[misc]  # callers guarantee a range
-    text = f"Suggested work {_fmt(low, read.unit)} to {_fmt(high, read.unit)}"
+    text = f"Suggested work {format_amount(low, read.unit)} to {format_amount(high, read.unit)}"
     if read.suggested_longest_rep_max is not None:
-        text += f", longest rep up to {_fmt(read.suggested_longest_rep_max, read.unit)}"
+        text += f", longest rep up to {format_amount(read.suggested_longest_rep_max, read.unit)}"
     return text + "; or keep the plan and say why."
 
 
@@ -167,6 +169,18 @@ def _session_findings(session: Session, dose: StimulusDose, read: ProgressionRea
     return out
 
 
+def _checkable_sessions(week: WeekPlan, review: WeekStimulusReview | None, as_of: date | None) -> list[Session]:
+    """Sessions the guardrails judge. A future week (or no `as_of`) checks all of them; once `as_of`
+    falls inside or after the week, only sessions dated on or after it that are not done, skipped or
+    replaced, so a session is never compared with its own execution."""
+    monday = date.fromisocalendar(*(int(x) for x in week.iso_week.split("-W")), 1)
+    ordered = sorted(week.sessions, key=lambda s: s.date)
+    if as_of is None or as_of < monday:
+        return ordered
+    done = {s.session_id for s in review.planned_done} if review else set()
+    return [s for s in ordered if s.date >= as_of and s.status == "planned" and s.id not in done]
+
+
 def _unplanned_finding(impact: RemainingImpact) -> PlanCheckFinding:
     consequence, fix = _IMPACT_TEXT[impact.impact]
     return PlanCheckFinding(
@@ -183,17 +197,19 @@ def check_week_progression(
     recent_longest: dict[str, float] | None = None,
     ledger: list[StimulusRecord] | None = None,
     macro_week: MacroWeek | None = None,
+    as_of: date | None = None,
 ) -> list[PlanCheckFinding]:
     """Guardrail findings for one week: jump, ignores-reduce/rebuild, stalled and rep-length (one per
     sport and kind, the most severe kept) plus an `unplanned-*` finding per remaining-session impact
     in `review`. `recent_longest` maps profile name to the longest recent work in its unit (default:
-    derived from `ledger`). Stalled needs `ledger` and is suppressed in a taper or race week."""
+    derived from `ledger`). Stalled needs `ledger` and is suppressed in a taper or race week.
+    `as_of`: when it falls inside or after the week, only sessions still to do are judged."""
     ledger = ledger or []
     recent = recent_longest if recent_longest is not None else _recent_longest(ledger)
     usable = {(r.sport, r.kind): r for r in reads if r.verdict != "insufficient_data" and r.confidence != "low"}
     taper = _is_taper_week(week, macro_week)
     best: dict[tuple[str, str], PlanCheckFinding] = {}
-    for session in sorted(week.sessions, key=lambda s: s.date):
+    for session in _checkable_sessions(week, review, as_of):
         profile = profile_for(session.sport)
         dose = planned_dose(session, athlete, recent_longest=recent.get(profile.name) if profile else None)
         read = usable.get((profile.name, dose.kind)) if profile and dose else None

@@ -44,6 +44,12 @@ cards:
     rep; weak data never fires them.
   recommendation: Quote the numbers, say these are untested coach judgment, and keep the plan only with a stated reason.
   content_hash: bdf505661c95118657b9469c0e41b0b2f3fcf86f1966f48575fb20d1d11ca04d
+- section: 8-calibration-against-real-execution-data-coach-judgment
+  heading: 8. Calibration against real execution data (`Coach judgment:`)
+  summary: Substituted kinds get no completion, endurance uses whole aerobic time, tiny quality doses fall back to endurance,
+    estimated runs never progress, doses round to practical units.
+  recommendation: Say these calibration rules are untested coach judgment and quote the floors and units used.
+  content_hash: b18a6fecd1ed935e8b98dee1e4f0d38b320e8c73ac43bd4b5c33e9f6b5ad705c
 - section: research-needed
   heading: Research needed
   summary: 'Lists four gaps: interval progression rates, recovery thresholds, the hard-recovery window in masters athletes,

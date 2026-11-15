@@ -654,7 +654,7 @@ def _cmd_progression(args: argparse.Namespace, store: StoreInterface) -> int:
         reads = inputs.reads
         out["review"] = inputs.review.model_dump(mode="json") if inputs.review else None
         findings = check_week_progression(week, athlete, reads=reads, review=inputs.review, ledger=inputs.ledger,
-                                          macro_week=_macro_week_for(store, slug, iso_week))
+                                          macro_week=_macro_week_for(store, slug, iso_week), as_of=as_of)
         out["findings"] = [f.model_dump(mode="json") for f in findings]
     out["reads"] = [r.model_dump(mode="json") for r in reads]
     print(json.dumps(out))
