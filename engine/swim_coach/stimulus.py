@@ -19,6 +19,7 @@ endurance/long is all work. Library: library/48-stimulus-progression.md (Coach j
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Callable, Literal
 
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 from swim_coach.models import (
     Athlete,
     Session,
+    ThresholdRecord,
     Workout,
     WorkoutIntervals,
     WorkoutRepeat,
@@ -65,6 +67,7 @@ KIND_RANK: dict[str, int] = {"tempo": 3, "threshold": 4, "vo2": 5}
 WORK_ROLES = frozenset({"interval", "steady"})
 REST_ROLES = frozenset({"rest", "recovery"})
 YARD_M = 0.9144
+MAX_REP_DETAIL = 200  # more work reps than this keep no per-rep detail
 
 
 class StimulusDose(BaseModel):
@@ -80,6 +83,10 @@ class StimulusDose(BaseModel):
     longest_rep_m: float | None = None
     work_rest_ratio: float | None = None
     confidence: Literal["structured", "estimated"]
+    # Executed quality work only: every work rep's size (the profile's unit) and the rest in seconds
+    # between consecutive reps (one fewer). Present only when every rep of the workout is in the dose.
+    rep_sizes: list[float] | None = None
+    rest_gaps_s: list[float] | None = None
 
     def work_in(self, unit: Unit) -> float | None:
         return self.work_s if unit == "s" else self.work_m
@@ -137,6 +144,8 @@ class ExecutedRead:
     matches_plan: bool = False  # the analyzer located the planned reps, so the kind is the planned kind
     total_s: float | None = None  # whole aerobic extent (moving time / total swum), for endurance kinds
     total_m: float | None = None
+    rep_sizes: list[float] | None = None  # per work rep, in the profile's unit
+    rest_gaps_s: list[float] | None = None  # rest seconds between consecutive work reps
 
 
 # --- zone ranks and the shared leaf walker -------------------------------------------------
@@ -249,10 +258,38 @@ class SportProfile:
     min_dose: dict[str, float] = field(default_factory=dict)
     work_round: float = 1.0
     rep_round: float = 1.0
+    # The threshold this sport's zones hang on: an `Athlete` field and `ThresholdRecord.metric`.
+    anchor_metric: str = ""
+    anchor_label: str = ""
+    anchor_unit_label: str = ""
+    anchor_higher_is_faster: bool = True  # False for a pace, where a smaller number is a higher threshold
+    anchor_gain_word: str = "rose"
 
     def extent(self, duration_min: float, distance_m: float | None) -> float | None:
         """A session's total size in this sport's dose unit."""
         return duration_min * 60.0 if self.unit == "s" else (float(distance_m) if distance_m else None)
+
+    def athlete_anchor(self, athlete: Athlete) -> float | None:
+        """The athlete's current threshold for this sport, None when unset."""
+        return getattr(athlete, self.anchor_metric, None) if self.anchor_metric else None
+
+    def anchor_gain_pct(self, then: float, now: float) -> float:
+        """How much higher the threshold is now, in percent of `then` (negative when it fell). A pace
+        threshold is higher when the pace is smaller."""
+        change = (now - then) if self.anchor_higher_is_faster else (then - now)
+        return change / then * 100.0
+
+    def anchor_on(self, day: date, athlete: Athlete, records: list[ThresholdRecord]) -> tuple[float | None, bool]:
+        """(threshold in effect on `day`, known). Known when a record of this sport's metric is dated on
+        or before `day`; otherwise the athlete's current value and False."""
+        mine = [
+            r for r in records
+            if r.metric == self.anchor_metric and r.sport in self.sports and r.measured_at <= day
+        ]
+        if not mine:
+            return self.athlete_anchor(athlete), False
+        latest = max(mine, key=lambda r: (r.measured_at, str(r.id)))
+        return latest.value, True
 
     def weight(self, leaf: Leaf, athlete: Athlete) -> float:
         seconds, metres = self.leaf_work(leaf, athlete)
@@ -270,6 +307,11 @@ def _swim_leaf_work(leaf: Leaf, athlete: Athlete) -> tuple[float | None, float |
     if leaf.distance_m is not None:
         return (leaf.distance_m / 100.0 * pace if pace else None), leaf.distance_m
     return leaf.duration_s, (leaf.duration_s * 100.0 / pace if pace and leaf.duration_s else None)
+
+
+def profile_named(name: str) -> SportProfile | None:
+    """The profile called `name` (`SportProfile.name`), None when there is none."""
+    return next((p for p in PROFILES if p.name == name), None)
 
 
 def profile_for(sport: str) -> SportProfile | None:
@@ -430,6 +472,9 @@ def _bike_intervals_read(intervals: WorkoutIntervals, athlete: Athlete) -> Execu
         fade_pct=intervals.fade_across_reps_pct,
         reps=[(rank, seconds, None) for rank, seconds in ranks],
         matches_plan=intervals.matched_to_prescription,
+        rep_sizes=[e.duration_s for e in efforts] if len(efforts) <= MAX_REP_DETAIL else None,
+        rest_gaps_s=[max(0.0, nxt.start_s - (cur.start_s + cur.duration_s)) for cur, nxt in zip(efforts, efforts[1:])]
+        if len(efforts) <= MAX_REP_DETAIL else None,
     )
 
 
@@ -486,6 +531,12 @@ def _swim_fade_pct(paces: list[float]) -> float | None:
     return (last - first) / first * 100.0 if first else None
 
 
+def _swim_rest_gaps(reps: list[tuple[float, float, float | None, float | None]]) -> list[float] | None:
+    """Rest seconds after every rep but the last; None when any is unrecorded."""
+    gaps = [r for _, _, _, r in reps[:-1]]
+    return None if any(g is None for g in gaps) else [float(g) for g in gaps]
+
+
 def _swim_sets_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKind | None) -> ExecutedRead | None:
     reps = _swim_reps_m(workout, athlete)
     css = athlete.css_pace_s_per_100m
@@ -513,6 +564,8 @@ def _swim_sets_read(workout: Workout, athlete: Athlete, planned_kind: StimulusKi
         in_band_pct=in_band,
         fade_pct=_swim_fade_pct([p for _, _, p, _ in work]),
         reps=[(ranks[i], reps[i][1], reps[i][0]) for i in keep],
+        rep_sizes=[reps[i][0] for i in keep] if len(keep) == len(reps) else None,
+        rest_gaps_s=_swim_rest_gaps(reps) if len(keep) == len(reps) else None,
         total_s=workout.duration_min * 60.0,
         total_m=total_m,
     )
@@ -542,10 +595,13 @@ PROFILES: tuple[SportProfile, ...] = (
     SportProfile(
         "bike", frozenset({"bike"}), "s", BIKE_LONG_MIN_WORK_S, BIKE_REP_TARGET_S, _bike_leaf_work, _bike_read,
         min_dose=BIKE_MIN_DOSE_S, work_round=BIKE_WORK_ROUND_S, rep_round=BIKE_REP_ROUND_S,
+        anchor_metric="ftp_watts", anchor_label="FTP", anchor_unit_label="W",
     ),
     SportProfile(
         "swim", frozenset({"swim_pool", "swim_ow"}), "m", SWIM_LONG_MIN_WORK_M, SWIM_REP_TARGET_M, _swim_leaf_work,
         _swim_read, min_dose=SWIM_MIN_DOSE_M, work_round=SWIM_WORK_ROUND_M, rep_round=SWIM_REP_ROUND_M,
+        anchor_metric="css_pace_s_per_100m", anchor_label="CSS", anchor_unit_label="s/100 m",
+        anchor_higher_is_faster=False, anchor_gain_word="improved",
     ),
 )
 
@@ -565,6 +621,8 @@ def _narrow_to_quality(read: ExecutedRead, kind: StimulusKind, profile: SportPro
         hard = [r for r in read.reps if (r[0] or 0) >= min_rank]
         if not hard:
             return
+        if len(hard) < len(read.reps):
+            read.rep_sizes = read.rest_gaps_s = None
         read.work_s = sum(s for _, s, _ in hard if s is not None) or None
         read.work_m = sum(m for _, _, m in hard if m is not None) or None
         read.rep_count = len(hard)
@@ -669,6 +727,8 @@ def executed_dose(
         longest_rep_m=read.longest_rep_m,
         work_rest_ratio=read.work_rest_ratio,
         confidence=read.confidence,
+        rep_sizes=read.rep_sizes if kind in QUALITY_KINDS else None,
+        rest_gaps_s=read.rest_gaps_s if kind in QUALITY_KINDS else None,
     )
     planned_kind = planned.kind if planned else None
     substituted = planned_kind is not None and not _same_family(planned_kind, kind)
