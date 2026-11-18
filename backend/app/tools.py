@@ -276,6 +276,12 @@ from app.garmin_push import push_on_demand
 from app.health_status_helpers import link_health_status_feedback
 from app.load_helpers import workout_load_au
 from app.logging_config import get_logger, log_context
+from app.progression_tools import (
+    compile_entry,
+    load_progression_inputs,
+    progression_view,
+    with_progression_tools,
+)
 from app.sync import (
     ON_DEMAND_SYNC_WINDOW_DAYS,
     SYNC_NOT_CONFIGURED_ERROR,
@@ -3092,6 +3098,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+def tools_schema(progression_tools: bool = False) -> list[dict[str, Any]]:
+    """The tool list handed to the model. Flag off (`Settings.progression_tools_enabled`): `TOOLS_SCHEMA`
+    itself, untouched. On: a copy with `get_progression` and `rung`/`archetype` on session entries."""
+    if not progression_tools:
+        return TOOLS_SCHEMA
+    return with_progression_tools(TOOLS_SCHEMA, SESSION_ENTRY_SCHEMA)
 
 
 def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -7161,7 +7175,10 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     return response
 
 
-def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tuple[Session | None, str | None]:
+def _session_from_add_fields(
+    entry: dict[str, Any], *, athlete: Athlete, progression: bool = False,
+    compiled: list[dict[str, Any]] | None = None,
+) -> tuple[Session | None, str | None]:
     """Builds one new `Session` from the same add-mode field shape
     `session_overrides`' `add` mode already uses (`date`/`sport`/
     `duration_min`/`purpose`, optionally `distance_m`/`intensity`/
@@ -7169,7 +7186,9 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
     `proposed_sessions` input, so an engine generator's output (e.g.
     `swim_coach.fueling.build_pre_event_nutrition_session`) or coach-
     authored content both go through one code path. Returns
-    `(session, error)`."""
+    `(session, error)`. With `progression` on, an entry carrying `rung` or `archetype` is compiled by
+    the engine first (`progression_tools.compile_entry`) and its build note (with any adjustments)
+    is appended to `compiled`; with it off those fields are ignored like any unknown field."""
     date_str = entry.get("date")
     if not date_str:
         return None, "proposed_sessions entry missing `date`"
@@ -7181,6 +7200,13 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
     sport = entry.get("sport")
     if not sport:
         return None, f"proposed_sessions entry for {date_str!r} needs `sport`"
+
+    if progression:
+        entry, note, compile_error = compile_entry(entry, athlete, when=date_str)
+        if compile_error:
+            return None, compile_error
+        if note is not None and compiled is not None:
+            compiled.append(note)
 
     duration_min = entry.get("duration_min")
     purpose = entry.get("purpose")
@@ -7235,7 +7261,8 @@ def _session_from_add_fields(entry: dict[str, Any], *, athlete: Athlete) -> tupl
 
 
 def _build_proposed_sessions_from_fields(
-    current: WeekPlan, proposed_sessions_input: list[dict[str, Any]], athlete: Athlete
+    current: WeekPlan, proposed_sessions_input: list[dict[str, Any]], athlete: Athlete,
+    *, progression: bool = False, compiled: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Session] | None, str | None]:
     """The `proposed_sessions`-supplied-directly path for `merge_week_plan`
     (as opposed to a fresh `generate_week` regeneration): starts from a deep
@@ -7247,7 +7274,7 @@ def _build_proposed_sessions_from_fields(
     `proposed_plan` that only differs from `current` in that one slot."""
     proposed = [s.model_copy(deep=True) for s in current.sessions]
     for entry in proposed_sessions_input:
-        session, error = _session_from_add_fields(entry, athlete=athlete)
+        session, error = _session_from_add_fields(entry, athlete=athlete, progression=progression, compiled=compiled)
         if error is not None:
             return None, error
         proposed = [
@@ -7426,7 +7453,9 @@ def _resolve_slot(
     return hits[0], None
 
 
-def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+def _handle_merge_week_plan(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, progression: bool = False
+) -> dict[str, Any]:
     """Two-phase diff-then-selective-merge tool for reconciling a PROPOSED
     change against an already-persisted week WITHOUT the coach having to
     guess or the tool having to silently choose a side -- replaces this
@@ -7513,9 +7542,10 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         return storage_error("athlete profile", exc)
 
     proposed_sessions_input = input_data.get("proposed_sessions")
+    compiled: list[dict[str, Any]] = []
     if proposed_sessions_input:
         proposed_sessions, build_error = _build_proposed_sessions_from_fields(
-            current, proposed_sessions_input, athlete
+            current, proposed_sessions_input, athlete, progression=progression, compiled=compiled
         )
         if build_error is not None:
             return {"error": build_error}
@@ -7545,6 +7575,7 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
             "proposed_plan": [_session_summary_json(s) for s in proposed_sessions],
             "diff": diff_items,
             "persisted": False,
+            **({"compiled": compiled} if compiled else {}),
         }
 
     if not isinstance(accept_from_proposed, list):
@@ -7603,6 +7634,7 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         "accepted": accepted_summary,
         "planning_warnings": list(merged.planning_warnings),
         "persisted": False,
+        **({"compiled": compiled} if compiled else {}),
     }
     if not confirm:
         draft_id = _hold_draft(store, slug, merged, tool="merge_week_plan")
@@ -8928,11 +8960,54 @@ def _resolve_macro_week_for_iso(store: StoreInterface, slug: str, week_start: da
     return next((w for w in macro.weeks if w.week_start == week_start), None)
 
 
+def _progression_kwargs(
+    store: StoreInterface, slug: str, athlete: Athlete, week: WeekPlan, *, enabled: bool
+) -> dict[str, Any]:
+    """`{"progression": ProgressionInputs}` for `check_week`, built once per call; `{}` when the flag is
+    off or the inputs cannot be built. Advisory: any failure (a store read, bad data, an engine error)
+    leaves the week check exactly as it is without this feature and logs one warning. The broad catch is
+    deliberate: this is an optional add-on at the tool boundary and must never break authoring."""
+    if not enabled:
+        return {}
+    try:
+        inputs = load_progression_inputs(store, slug, athlete, week, as_of=athlete_today(athlete))
+    except Exception as exc:  # noqa: BLE001
+        log.warn("progression inputs unavailable", athlete=slug, iso_week=week.iso_week, error=str(exc)[:200],
+                 error_type=type(exc).__name__)
+        return {}
+    return {"progression": inputs}
+
+
+def _handle_get_progression(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+    try:
+        athlete = store.load_athlete(slug)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='athlete profile', exc_info=True)
+        return storage_error("athlete profile", exc)
+    as_of = athlete_today(athlete)
+    iso_week = input_data.get("iso_week") or iso_week_str(as_of)
+    _, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
+    try:
+        # No plan on file for the week still reviews the unplanned work done in it.
+        week = store.load_week(slug, iso_week) or WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=iso_week, meso_block="none", focus="",
+            target_volume_m=0, sessions=[],
+        )
+        inputs = load_progression_inputs(store, slug, athlete, week, as_of=as_of)
+    except Exception as exc:  # noqa: BLE001
+        log.error("storage read failed", what='progression history', exc_info=True)
+        return storage_error("progression history", exc)
+    return progression_view(inputs.reads, inputs.review, iso_week=iso_week, sport=input_data.get("sport"))
+
+
 def _handle_author_week_plan(
     input_data: dict[str, Any], *, store: StoreInterface, slug: str,
     confirmer_role: Literal["athlete", "coach"] = "athlete",
     confirmer_id: str | None = None,
     plan_change_notifier: Callable[[str, str, str], None] | None = None,
+    progression: bool = False,
 ) -> dict[str, Any]:
     iso_week = input_data.get("iso_week")
     if not iso_week:
@@ -8967,10 +9042,11 @@ def _handle_author_week_plan(
         return storage_error("athlete profile", exc)
 
     sessions: list[Session] = []
+    compiled: list[dict[str, Any]] = []
     for i, entry in enumerate(sessions_input):
         if not isinstance(entry, dict):
             return {"error": f"sessions[{i}] must be an object"}
-        session, error = _session_from_add_fields(entry, athlete=athlete)
+        session, error = _session_from_add_fields(entry, athlete=athlete, progression=progression, compiled=compiled)
         if error is not None:
             return {"error": f"sessions[{i}]: {error}"}
         sessions.append(session)
@@ -9005,7 +9081,8 @@ def _handle_author_week_plan(
     recent_weeks = [prev_week] if prev_week is not None else []
 
     report = check_week(
-        candidate, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug)
+        candidate, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug),
+        **_progression_kwargs(store, slug, athlete, candidate, enabled=progression),
     )
 
     dropped = _dropped_sessions(current, candidate)
@@ -9040,6 +9117,7 @@ def _handle_author_week_plan(
         "report": report.to_dict(),
         "dropped_sessions": dropped,
         "persisted": False,
+        **({"compiled": compiled} if compiled else {}),
     }
     if draft_id:
         needs_confirmation = [f["id"] for f in report.to_dict()["findings"] if f["id"].startswith("confirm-")]
@@ -9176,7 +9254,9 @@ def _confirm_author_week_plan(
     }
 
 
-def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
+def _handle_check_plan(
+    input_data: dict[str, Any], *, store: StoreInterface, slug: str, progression: bool = False
+) -> dict[str, Any]:
     try:
         athlete = store.load_athlete(slug)
     except Exception as exc:  # noqa: BLE001
@@ -9244,7 +9324,8 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
                 prev_week = None
             recent_weeks = [prev_week] if prev_week is not None else []
             week_report = check_week(
-                week, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug)
+                week, macro_week, athlete, recent_weeks=recent_weeks, events=_events_for_check(store, slug),
+                **_progression_kwargs(store, slug, athlete, week, enabled=progression),
             )
             response["week"] = {"iso_week": iso_week, **week_report.to_dict()}
     return response
@@ -9261,6 +9342,7 @@ def build_tool_handlers(
     confirmer_role: Literal["athlete", "coach"] = "athlete",
     confirmer_id: str | None = None,
     plan_change_notifier: Callable[[str, str, str], None] | None = None,
+    progression_tools: bool = False,
 ) -> dict[str, ToolHandler]:
     """Binds the request's athlete slug / expert_mode / store into closures
     over the tool handlers above, so the tool schema the model sees never
@@ -9287,7 +9369,10 @@ def build_tool_handlers(
     `plan_change_notifier`, when given (only for a coach-mode request -- see the same two
     route call sites), is `app.notify.notify_athlete_of_coach_plan_change` pre-bound to this
     request's `store`/`settings`/athlete slug via `functools.partial`; `None` for an
-    athlete-session request, where no such notification is needed."""
+    athlete-session request, where no such notification is needed.
+    `progression_tools` (`Settings.progression_tools_enabled`, default off) adds `get_progression`, compiles
+    `rung`/`archetype` session entries and passes progression inputs to the week check; see
+    `tools_schema` for the matching model-visible schema."""
     # Runaway guard state for `author_macro_plan` (approved plan's "Token
     # economics" section): a fresh, empty dict per call to this function --
     # `build_tool_handlers` itself is called once per chat request (see
@@ -9307,10 +9392,10 @@ def build_tool_handlers(
         "author_week_plan": lambda input_data: _handle_author_week_plan(
             input_data, store=store, slug=slug,
             confirmer_role=confirmer_role, confirmer_id=confirmer_id,
-            plan_change_notifier=plan_change_notifier,
+            plan_change_notifier=plan_change_notifier, progression=progression_tools,
         ),
         "check_plan": lambda input_data: _handle_check_plan(
-            input_data, store=store, slug=slug
+            input_data, store=store, slug=slug, progression=progression_tools
         ),
         "get_plan_summary": lambda input_data: _handle_get_plan_summary(
             input_data, store=store, slug=slug
@@ -9429,7 +9514,7 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
         "merge_week_plan": lambda input_data: _handle_merge_week_plan(
-            input_data, store=store, slug=slug
+            input_data, store=store, slug=slug, progression=progression_tools
         ),
         "set_event_active_status": lambda input_data: _handle_set_event_active_status(
             input_data, store=store, slug=slug
@@ -9444,6 +9529,8 @@ def build_tool_handlers(
             input_data, store=store, slug=slug
         ),
     }
+    if progression_tools:
+        handlers["get_progression"] = lambda input_data: _handle_get_progression(input_data, store=store, slug=slug)
     return {name: _with_log_context(name, slug, handler) for name, handler in handlers.items()}
 
 

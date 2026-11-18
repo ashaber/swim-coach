@@ -85,6 +85,9 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_ride_pacing",
     "render_plan_table",
 })
+# Pure reads that exist only when PROGRESSION_TOOLS_ENABLED (app.progression_tools). Kept out of
+# READ_ONLY_TOOLS on purpose: that set IS the Haiku router's allowlist, and this tool is not on it.
+PROGRESSION_READ_ONLY_TOOLS: frozenset[str] = frozenset({"get_progression"})
 # Draft/check tools that never persist (propose_adaptation always returns persisted: false).
 DRAFT_ONLY_TOOLS: frozenset[str] = frozenset({"propose_adaptation", "check_plan"})
 # Side effects outside the plan/profile: workout analytics/series writes, device/calendar pushes,
