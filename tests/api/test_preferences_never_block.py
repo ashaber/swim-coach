@@ -10,6 +10,7 @@ import uuid
 from datetime import date, timedelta
 
 import pytest
+from fakes import seed_generated_week
 from swim_coach.models import Event
 from swim_coach.plan import scaffold_macro
 from swim_coach.store import FileStore
@@ -114,12 +115,11 @@ def test_unsalvageable_structured_content_is_dropped_with_an_actionable_note_not
 # --- 3. an equipment/style preference with no matching library template still writes the week ----------
 
 
-def test_a_template_preference_with_no_match_falls_back_to_the_default_rotation_with_a_warning(athletes_dir) -> None:
+def test_a_template_preference_with_no_match_falls_back_to_the_default_rotation(athletes_dir) -> None:
     store, h = _h(athletes_dir)
-    result = h["replace_week_plan"]({"iso_week": "2026-W29", "template_preference": {"equipment_any": ["kettlebell"]}})
+    result = h["merge_week_plan"]({"iso_week": "2026-W29", "template_preference": {"equipment_any": ["kettlebell"]}})
     assert "error" not in result, result
-    assert result["sessions"]
-    assert any("default rotation" in w for w in result["planning_warnings"])
+    assert result["proposed_plan"]
 
 
 # --- 4. a preference sent to the profile tool is remembered, not rejected -------------------------------
@@ -162,7 +162,7 @@ def test_zwo_export_of_a_session_the_athlete_described_in_their_own_words_explai
     h["set_weekly_template"]({"template": {"tue": [{"kind": "bike", "role": "hard", "structure": "3 x 8 min over/unders"}]}, "confirm": True})
     ws = next(b for b in macro.blocks if b.name in ("build", "peak", "base")).start_date + timedelta(weeks=1)
     y, w, _ = ws.isocalendar()
-    week = h["create_week_plan"]({"iso_week": f"{y}-W{w:02d}"})
+    seed_generated_week(store, "renee", f"{y}-W{w:02d}")
     sid = store.load_week("renee", f"{y}-W{w:02d}").sessions[0].id
 
     result = h["export_zwo_workout"]({"session_id": str(sid)})

@@ -308,3 +308,29 @@ def make_triage_block(block_id: str = "tu_triage", **fields: Any) -> SimpleNames
     )
     data.update(fields)
     return make_tool_use_block(block_id, "triage", data)
+
+
+def seed_generated_week(store: Any, slug: str, iso_week: str, template_preference: Any = None) -> Any:
+    """Persist the engine-regenerated week for `iso_week` (the generation path `merge_week_plan` uses
+    for its regenerate-proposal) as the athlete's live week, and return it. Gives the draft/confirm
+    and override tests a realistic live week to edit now that no tool creates one from the macro."""
+    from app.tools import _generate_candidate_week_for_merge
+    from swim_coach.models import WeekPlan
+
+    athlete = store.load_athlete(slug)
+    year, wk = iso_week.split("-W")
+    week_start = date.fromisocalendar(int(year), int(wk), 1)
+    sessions, error = _generate_candidate_week_for_merge(
+        store, slug, iso_week, week_start, template_preference, athlete
+    )
+    assert error is None, error
+    existing = store.load_week(slug, iso_week)
+    if existing is not None:
+        week = existing.model_copy(update={"sessions": sessions})
+    else:
+        week = WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=iso_week, meso_block="base",
+            focus="seeded", target_volume_m=0, sessions=sessions,
+        )
+    store.save_week(slug, week)
+    return week
