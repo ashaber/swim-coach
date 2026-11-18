@@ -29,6 +29,7 @@ from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 from swim_coach.event_groups import effective_target, group_span, planning_targets, race_dates
+from swim_coach.formatting import duration_min_for_distance, format_pace_s, round_100
 from swim_coach.models import (
     Athlete,
     Event,
@@ -996,18 +997,10 @@ def _bike_training_days(athlete: Athlete) -> tuple[list[int] | None, dict[int, s
     return ordered, labels
 
 
-def _round_100(value: float) -> int:
-    return int(round(value / 100)) * 100
-
-
 def _z2_pace_s_per_100m(athlete: Athlete) -> float:
     css = athlete.css_pace_s_per_100m or DEFAULT_CSS_PACE_S_PER_100M
     z2 = zone_table(css)["Z2"]
     return (z2["pace_lo_s"] + z2["pace_hi_s"]) / 2
-
-
-def _duration_min_for_distance(distance_m: float, pace_s_per_100m: float) -> float:
-    return round(max(distance_m, 0) / 100 * pace_s_per_100m / 60, 1)
 
 
 def _pick_days(count: int, excluded: set[int]) -> list[int]:
@@ -1065,13 +1058,6 @@ def _spread_days_evenly(count: int, *, day_offsets: list[int] | None = None) -> 
         fillers = [o for o in (round(i * 7 / count) for i in range(count)) if o not in pattern]
         return sorted(pattern + fillers[: count - len(pattern)])
     return [round(i * 7 / count) for i in range(count)]
-
-
-def _format_pace_s(pace_s: float) -> str:
-    """Format a seconds-per-100m pace as M:SS (e.g. 92.3 -> '1:32')."""
-    total = int(round(pace_s))
-    minutes, seconds = divmod(total, 60)
-    return f"{minutes}:{seconds:02d}"
 
 
 def _strength_session_structure_template(session_index: int) -> WorkoutStructure:
@@ -1299,7 +1285,7 @@ def _additional_swim_structure_template(
     z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
 
     warm_up = max(
-        ADDITIONAL_SWIM_MIN_WARM_UP_M, _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE)
+        ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE)
     )
     # Sized only to choose a sensible rep length / rep count below -- the
     # actual cool-down (and therefore the session's true total) is
@@ -1310,11 +1296,11 @@ def _additional_swim_structure_template(
     # that rounding back into the cool-down, could over- or under-state the
     # printed session total by up to one rep length relative to distance_m).
     cool_down_budget_estimate = max(
-        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
+        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
     )
     main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
 
-    z2_range = f"{_format_pace_s(z2['pace_lo_s'])}-{_format_pace_s(z2['pace_hi_s'])}/100m"
+    z2_range = f"{format_pace_s(z2['pace_lo_s'])}-{format_pace_s(z2['pace_hi_s'])}/100m"
     warmup_step = WorkoutStep(
         label=f"{warm_up}m easy, building to Z2 pace ({z2_range}) by the end.",
         role="warmup",
@@ -5510,7 +5496,7 @@ def generate_week(
         reserved_for_long_swim = target_volume_m * LONG_SWIM_SHARE
         remaining_for_pool = max(0.0, target_volume_m - reserved_for_long_swim)
         raw_per_day = remaining_for_pool / len(athlete.pool_schedule)
-        no_coach_pool_distance_m = max(NO_COACH_POOL_SESSION_FLOOR_M, _round_100(raw_per_day))
+        no_coach_pool_distance_m = max(NO_COACH_POOL_SESSION_FLOOR_M, round_100(raw_per_day))
 
     sessions: list[Session] = []
     for entry in athlete.pool_schedule:
@@ -5550,7 +5536,7 @@ def generate_week(
                     sport="swim_pool",
                     source="ai_coach",
                     duration_min=max(
-                        _duration_min_for_distance(no_coach_pool_distance_m, pace_s), 15.0
+                        duration_min_for_distance(no_coach_pool_distance_m, pace_s), 15.0
                     ),
                     distance_m=no_coach_pool_distance_m,
                     intensity={"anchor": "rpe"},
@@ -5584,12 +5570,12 @@ def generate_week(
     else:
         pool_total_m = len(athlete.pool_schedule) * no_coach_pool_distance_m
 
-    long_swim_distance = _round_100(target_volume_m * LONG_SWIM_SHARE)
+    long_swim_distance = round_100(target_volume_m * LONG_SWIM_SHARE)
     if block.name == "taper":
         peak_block = macro.blocks[block_index - 1]
-        peak_long_swim = _round_100(peak_block.weekly_volume_target_m * LONG_SWIM_SHARE)
+        peak_long_swim = round_100(peak_block.weekly_volume_target_m * LONG_SWIM_SHARE)
         weeks_into_taper = week_index_in_block + 1
-        cap = max(0, _round_100(peak_long_swim * (1 - TAPER_WEEKLY_DECAY * weeks_into_taper)))
+        cap = max(0, round_100(peak_long_swim * (1 - TAPER_WEEKLY_DECAY * weeks_into_taper)))
         long_swim_distance = min(long_swim_distance, cap)
     long_swim_distance = max(0, long_swim_distance)
 
@@ -5601,7 +5587,7 @@ def generate_week(
         long_swim_distance = max(0, long_swim_distance + remainder)
 
     if event_format == "multi_day_stage":
-        saturday_distance = _round_100(long_swim_distance * STAGE_SATURDAY_SHARE)
+        saturday_distance = round_100(long_swim_distance * STAGE_SATURDAY_SHARE)
         sunday_distance = max(0, long_swim_distance - saturday_distance)
         sessions.append(
             Session(
@@ -5610,7 +5596,7 @@ def generate_week(
                 date=week_start + timedelta(days=_WEEKDAY_OFFSETS["sat"]),
                 sport="swim_ow",
                 source="ai_coach",
-                duration_min=max(_duration_min_for_distance(saturday_distance, pace_s), 15.0),
+                duration_min=max(duration_min_for_distance(saturday_distance, pace_s), 15.0),
                 distance_m=saturday_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="stage day 1 (Saturday) — back-to-back long open-water swim",
@@ -5625,7 +5611,7 @@ def generate_week(
                 date=week_start + timedelta(days=_WEEKDAY_OFFSETS["sun"]),
                 sport="swim_ow",
                 source="ai_coach",
-                duration_min=max(_duration_min_for_distance(sunday_distance, pace_s), 15.0),
+                duration_min=max(duration_min_for_distance(sunday_distance, pace_s), 15.0),
                 distance_m=sunday_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="stage day 2 (Sunday) — swum on Saturday's fatigue; refuel/recover aggressively overnight between stage days",
@@ -5641,7 +5627,7 @@ def generate_week(
                 date=week_start + timedelta(days=_WEEKDAY_OFFSETS["sat"]),
                 sport="swim_ow",
                 source="ai_coach",
-                duration_min=max(_duration_min_for_distance(long_swim_distance, pace_s), 15.0),
+                duration_min=max(duration_min_for_distance(long_swim_distance, pace_s), 15.0),
                 distance_m=long_swim_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="long open-water swim — endurance and fueling-practice anchor of the week",
@@ -5688,7 +5674,7 @@ def generate_week(
                 date=week_start + timedelta(days=additional_offset),
                 sport="swim_ow",
                 source="ai_coach",
-                duration_min=_duration_min_for_distance(additional_distance, pace_s),
+                duration_min=duration_min_for_distance(additional_distance, pace_s),
                 distance_m=additional_distance,
                 intensity={"zone": "Z2", "anchor": "css_pace"},
                 purpose="additional pool-independent aerobic volume",
@@ -5939,7 +5925,7 @@ def adjust_session(
     When `session.structured` IS present, the scaled tree becomes the new
     source of truth for `distance_m` (`_sum_distance_m`), and `duration_min`
     is then re-estimated from the new distance at `css_pace_s`
-    (`_duration_min_for_distance`) when available and the new distance is
+    (`duration_min_for_distance`) when available and the new distance is
     nonzero (a real swim distance); otherwise (a strength session with no
     distance-kind content, or no CSS pace on file) `duration_min` is instead
     scaled directly by the same `direction`/`magnitude_pct` factor the tree
@@ -5968,7 +5954,7 @@ def adjust_session(
             session.distance_m = round(new_distance)
             if css_pace_s is not None:
                 session.duration_min = max(
-                    _duration_min_for_distance(session.distance_m, css_pace_s), 10.0
+                    duration_min_for_distance(session.distance_m, css_pace_s), 10.0
                 )
             else:
                 session.duration_min = max(round(session.duration_min * factor, 1), 10.0)

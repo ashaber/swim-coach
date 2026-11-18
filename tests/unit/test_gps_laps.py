@@ -482,3 +482,11 @@ def test_analyze_laps_end_to_end_on_synthetic_loop():
 def test_analyze_laps_without_a_series_returns_empty_list_not_raises():
     assert analyze_laps(None, []) == []
     assert analyze_laps({"t_s": []}, []) == []
+
+
+def test_avg_speed_mps_prefers_speed_samples_then_falls_back_to_distance():
+    from swim_coach.gps_laps import avg_speed_mps
+
+    assert avg_speed_mps({"speed_mps": [2.0, None, 4.0]}) == 3.0
+    assert avg_speed_mps({"speed_mps": [None], "dist_m": [0, 50, 100], "t_s": [0, 10, 20]}) == 5.0
+    assert avg_speed_mps({}) is None

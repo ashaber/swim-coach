@@ -62,6 +62,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Literal
 
+from swim_coach.formatting import duration_min_for_distance, format_pace_s, round_100
 from swim_coach.models import WorkoutRepeat, WorkoutStep, WorkoutStructure, WorkoutTarget
 from swim_coach.zones import zone_table
 
@@ -72,8 +73,7 @@ OWTemplateScaling = Literal["skill_scalable", "endurance_floor"]
 # already used by plan.py's pool-independent ADDITIONAL_SWIM_* constants
 # (library/14-swim-set-structure.md) -- kept as this module's own constants
 # (not imported from plan.py) so this module has no import-time dependency
-# on plan.py, same "duplicate the trivial constant, don't cross-import"
-# convention workout_templates.py already documents for `_format_pace_s`.
+# on plan.py, same "duplicate the trivial constant, don't cross-import" convention.
 OW_WARM_UP_SHARE = 0.12
 OW_WARM_UP_MIN_M = 300
 OW_COOL_DOWN_SHARE = 0.06
@@ -117,53 +117,36 @@ TAPER_ACTIVATION_MAX_DISTANCE_M = 2000
 # purpose, the mirror-image concern of the endurance-floor templates above.
 
 
-def _format_pace_s(pace_s: float) -> str:
-    """Format seconds-per-100m as M:SS. Duplicated one-liner, same rationale
-    as `workout_templates._format_pace_s`'s own docstring (no cross-module
-    import for a trivial, stable formatter)."""
-    total = int(round(pace_s))
-    minutes, seconds = divmod(total, 60)
-    return f"{minutes}:{seconds:02d}"
-
-
 def _zone_range(zone: dict) -> str:
     """Format a zone's pace range, handling the open (unbounded) ends Z1
     (no hi bound) and Z5 (no lo bound) carry -- `zone_table` leaves those
     `None` by design (see `zones.py`)."""
     lo, hi = zone["pace_lo_s"], zone["pace_hi_s"]
     if lo is not None and hi is not None:
-        return f"{_format_pace_s(lo)}-{_format_pace_s(hi)}/100m"
+        return f"{format_pace_s(lo)}-{format_pace_s(hi)}/100m"
     if hi is not None:
-        return f"at or faster than {_format_pace_s(hi)}/100m"
-    return f"at or slower than {_format_pace_s(lo)}/100m"
-
-
-def _round_100(value: float) -> int:
-    return int(round(value / 100)) * 100
+        return f"at or faster than {format_pace_s(hi)}/100m"
+    return f"at or slower than {format_pace_s(lo)}/100m"
 
 
 def _round_50(value: float) -> int:
     return int(round(value / 50)) * 50
 
 
-def _duration_min_for_distance(distance_m: float, pace_s_per_100m: float) -> float:
-    return round(max(distance_m, 0) / 100 * pace_s_per_100m / 60, 1)
-
-
 def _warm_up_cool_down(distance_m: int) -> tuple[int, int]:
     """Warm-up/cool-down distances for a given total, clamped so their sum
     never reaches `distance_m` even for a short session (falls back to a
     quarter/eighth split instead of the normal share-based sizing)."""
-    warm_up = max(OW_WARM_UP_MIN_M, _round_100(distance_m * OW_WARM_UP_SHARE))
-    cool_down = max(OW_COOL_DOWN_MIN_M, _round_100(distance_m * OW_COOL_DOWN_SHARE))
+    warm_up = max(OW_WARM_UP_MIN_M, round_100(distance_m * OW_WARM_UP_SHARE))
+    cool_down = max(OW_COOL_DOWN_MIN_M, round_100(distance_m * OW_COOL_DOWN_SHARE))
     if warm_up + cool_down >= distance_m:
-        warm_up = max(100, _round_100(distance_m / 4))
-        cool_down = max(100, _round_100(distance_m / 8))
+        warm_up = max(100, round_100(distance_m / 4))
+        cool_down = max(100, round_100(distance_m / 8))
     return warm_up, cool_down
 
 
 def _require_min_duration(distance_m: int, css_pace_s: float, floor_min: float, template_label: str) -> None:
-    duration_min = _duration_min_for_distance(distance_m, css_pace_s)
+    duration_min = duration_min_for_distance(distance_m, css_pace_s)
     if duration_min < floor_min:
         raise ValueError(
             f"{template_label} needs at least {floor_min:.0f} min of continuous "
@@ -185,7 +168,7 @@ def _steady_with_feed_reps(
     the `WorkoutRepeat` node plus the actual total distance it consumes (may
     differ slightly from `main_budget` due to rounding to a whole rep)."""
     reps = max(1, round(main_budget / rep_m)) if main_budget >= rep_m else 1
-    actual_rep_m = _round_100(main_budget / reps) if reps else main_budget
+    actual_rep_m = round_100(main_budget / reps) if reps else main_budget
     swim_rep = WorkoutStep(
         label=f"{actual_rep_m}m steady at Z2 pace ({zone_range_label}) -- {rep_note}",
         role="interval",
@@ -289,7 +272,7 @@ def build_negative_split_ow_template(distance_m: int, css_pace_s: float) -> Work
     z2, z3 = zones["Z2"], zones["Z3"]
     warm_up, cool_down = _warm_up_cool_down(distance_m)
     leg_budget = max(200, distance_m - warm_up - cool_down)
-    out_leg = _round_100(leg_budget / 2)
+    out_leg = round_100(leg_budget / 2)
     back_leg = leg_budget - out_leg
     out_step = WorkoutStep(
         label=f"{out_leg}m out at a controlled Z2 pace ({_zone_range(z2)}) -- steady, aerobic, leave something in reserve.",
@@ -341,7 +324,7 @@ def build_chop_wind_adaptation_template(distance_m: int, css_pace_s: float) -> W
     z2, z3 = zones["Z2"], zones["Z3"]
     warm_up, cool_down = _warm_up_cool_down(distance_m)
     leg_budget = max(200, distance_m - warm_up - cool_down)
-    into_leg = _round_100(leg_budget / 2)
+    into_leg = round_100(leg_budget / 2)
     down_leg = leg_budget - into_leg
     into_step = WorkoutStep(
         label=(
@@ -399,7 +382,7 @@ def build_sighting_drill_template(distance_m: int, css_pace_s: float) -> Workout
     z2 = zones["Z2"]
     warm_up, cool_down = _warm_up_cool_down(distance_m)
     leg_budget = max(200, distance_m - warm_up - cool_down)
-    frequent_leg = _round_100(leg_budget / 2)
+    frequent_leg = round_100(leg_budget / 2)
     infrequent_leg = leg_budget - frequent_leg
     frequent_step = WorkoutStep(
         label=(
@@ -565,16 +548,16 @@ def build_taper_activation_template(distance_m: int, css_pace_s: float) -> Worko
         )
     zones = zone_table(css_pace_s)
     z2, z4, z5 = zones["Z2"], zones["Z4"], zones["Z5"]
-    warm_up = max(300, _round_100(distance_m * 0.35))
-    cool_down = max(150, _round_100(distance_m * 0.15))
+    warm_up = max(300, round_100(distance_m * 0.35))
+    cool_down = max(150, round_100(distance_m * 0.15))
     if warm_up + cool_down >= distance_m:
-        warm_up = max(100, _round_100(distance_m / 3))
-        cool_down = max(100, _round_100(distance_m / 6))
+        warm_up = max(100, round_100(distance_m / 3))
+        cool_down = max(100, round_100(distance_m / 6))
     remaining = max(0, distance_m - warm_up - cool_down)
 
-    race_pace_m = min(remaining, _round_100(remaining * 0.65))
+    race_pace_m = min(remaining, round_100(remaining * 0.65))
     race_pace_reps = max(1, round(race_pace_m / 200)) if race_pace_m >= 100 else 0
-    race_pace_rep_m = _round_100(race_pace_m / race_pace_reps) if race_pace_reps else 0
+    race_pace_rep_m = round_100(race_pace_m / race_pace_reps) if race_pace_reps else 0
     actual_race = race_pace_rep_m * race_pace_reps
 
     accel_total = max(0, remaining - actual_race)

@@ -211,7 +211,8 @@ from swim_coach.analysis import analytics_for_coach, has_detailed_analyzer
 from swim_coach.course_features import MAX_SPLIT_PARTS, MIN_SPLIT_PARTS
 from swim_coach.section_detail import build_section_detail
 from swim_coach.athlete_time import athlete_today
-from swim_coach.event_groups import disband_group, effective_target, groups, set_group
+from swim_coach.event_groups import disband_group, effective_target, find_event, groups, set_group
+from swim_coach.formatting import duration_min_for_distance
 from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.gps_laps import GpsLapMetrics, analyze_laps
 from swim_coach.load import (
@@ -282,7 +283,6 @@ from swim_coach.plan import (
     _template_week_sessions,
     bike_session_as,
     template_normalization_notes,
-    _duration_min_for_distance,
     _monday_of_week,
     _monday_on_or_after,
     _session_is_hard_bike,
@@ -3175,11 +3175,9 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
     if not iso_week:
         return {"error": "iso_week is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         athlete = store.load_athlete(slug)
@@ -6853,11 +6851,9 @@ def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterfac
     if preference_error is not None:
         return {"error": preference_error}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     existing = store.load_week(slug, iso_week)
     if existing is not None:
@@ -6967,11 +6963,9 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     if not new_date_str:
         return {"error": "new_date is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         new_date = date.fromisoformat(new_date_str)
@@ -7184,7 +7178,7 @@ def _apply_session_overrides(
 
     Takes the full `athlete` (not just `css_pace_s`) because the `ow_template`
     field below needs `workout_templates.resolve_template`'s full athlete
-    argument, not just the CSS pace `_duration_min_for_distance` re-estimation
+    argument, not just the CSS pace `duration_min_for_distance` re-estimation
     already used.
     """
     css_pace_s = athlete.css_pace_s_per_100m
@@ -7432,11 +7426,11 @@ def _apply_session_overrides(
         elif distance_m is not None and css_pace_s is not None and session.sport in ("swim_pool", "swim_ow"):
             # No explicit duration override -- re-estimate from the new
             # distance at the athlete's own CSS pace, same rough-estimate
-            # math the engine itself uses (_duration_min_for_distance),
+            # math the engine itself uses (duration_min_for_distance),
             # rather than leaving a stale duration paired with a new distance.
             # If the athlete has no CSS pace on file yet, leave duration_min
             # as generate_week originally computed it rather than guessing.
-            session.duration_min = max(_duration_min_for_distance(distance_m, css_pace_s), 15.0)
+            session.duration_min = max(duration_min_for_distance(distance_m, css_pace_s), 15.0)
 
         if interval_type is not None:
             wanted = "endurance" if str(interval_type).strip().lower() in ("endurance", "easy", "z2", "zone 2", "recovery ride") else normalize_interval_type(interval_type)
@@ -7544,7 +7538,7 @@ def _apply_session_overrides(
             session.structure = render_prose(resolved)
             session.distance_m = int(template_distance)
             if duration_min is None:
-                session.duration_min = max(_duration_min_for_distance(template_distance, css_pace_s), 15.0)
+                session.duration_min = max(duration_min_for_distance(template_distance, css_pace_s), 15.0)
     return None, notes
 
 
@@ -7693,6 +7687,15 @@ def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
                 }
             )
     return dropped
+
+
+def _parse_iso_week_start(iso_week: str) -> tuple[date | None, dict[str, str] | None]:
+    """Monday of a `YYYY-Wnn` week as `(date, None)`, or `(None, error_dict)` if malformed."""
+    try:
+        year_str, week_str = iso_week.split("-W")
+        return date.fromisocalendar(int(year_str), int(week_str), 1), None
+    except (ValueError, IndexError):
+        return None, {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
 
 
 def _iso_week_for_date(target_date: date) -> str:
@@ -7960,11 +7963,9 @@ def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterfa
     if preference_error is not None:
         return {"error": preference_error}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     confirm = bool(input_data.get("confirm", False))
     if confirm:
@@ -8179,11 +8180,9 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     if not iso_week:
         return {"error": "iso_week is required"}
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    _, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     if bool(input_data.get("confirm", False)):
         agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="patch_week_plan")
@@ -8611,11 +8610,9 @@ def _handle_merge_week_plan(input_data: dict[str, Any], *, store: StoreInterface
         if agreed is not None:
             return agreed
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     try:
         current = store.load_week(slug, iso_week)
@@ -8848,11 +8845,9 @@ def _handle_propose_session_adjustment(
 
     confirm = bool(input_data.get("confirm", False))
 
-    try:
-        year_str, week_str = iso_week.split("-W")
-        date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    _, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     week = store.load_week(slug, iso_week)
     if week is None:
@@ -8943,24 +8938,6 @@ def _handle_propose_session_adjustment(
     )
     response["persisted"] = True
     return response
-
-
-def _find_event_by_ref(events: list[Event], query: str) -> Event | None:
-    """Match an event by UUID prefix (case-insensitive) or exact,
-    case-insensitive name -- same convention as `swim_coach.cli`'s own
-    `_find_event` helper, reimplemented here rather than imported since
-    `tools.py` deliberately doesn't depend on the CLI module. Deliberately
-    does NOT filter on `Event.active`, same as every other event lookup in
-    this file (`draft_macro_plan`/`replace_macro_plan`/`propose_adaptation`)
-    -- an inactive event must still resolve."""
-    q = query.strip().lower()
-    for event in events:
-        if str(event.id).lower().startswith(q):
-            return event
-    for event in events:
-        if event.name.strip().lower() == q:
-            return event
-    return None
 
 
 def _taper_week_plans(
@@ -9146,7 +9123,7 @@ def _handle_propose_injury_adapted_taper(
         named_event = None
         if input_data.get("event"):
             try:
-                named_event = _find_event_by_ref(store.load_events(slug), input_data["event"])
+                named_event = find_event(store.load_events(slug), input_data["event"])
             except Exception:  # noqa: BLE001
                 log.warn("swallowed exception, using a default", where='backend/app/tools.py', line_hint=7580, exc_info=True)
                 named_event = None
@@ -9175,7 +9152,7 @@ def _handle_propose_injury_adapted_taper(
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='events', exc_info=True)
         return storage_error("events", exc)
-    event = _find_event_by_ref(events, event_ref)
+    event = find_event(events, event_ref)
     if event is None:
         known = [{"id": str(e.id), "name": e.name} for e in events]
         return {"error": f"no event matching {event_ref!r}; known events: {known}"}
@@ -10082,11 +10059,9 @@ def _handle_author_week_plan(
     iso_week = input_data.get("iso_week")
     if not iso_week:
         return {"error": "iso_week is required"}
-    try:
-        year_str, week_str = iso_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    except (ValueError, IndexError):
-        return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+    week_start, week_error = _parse_iso_week_start(iso_week)
+    if week_error is not None:
+        return week_error
 
     if bool(input_data.get("confirm", False)):
         agreed = _confirm_author_week_plan(
@@ -10371,11 +10346,9 @@ def _handle_check_plan(input_data: dict[str, Any], *, store: StoreInterface, slu
 
     iso_week = input_data.get("iso_week")
     if iso_week:
-        try:
-            year_str, week_str = iso_week.split("-W")
-            week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
-        except (ValueError, IndexError):
-            return {"error": f"invalid iso_week {iso_week!r}; expected format 'YYYY-Wnn'"}
+        week_start, week_error = _parse_iso_week_start(iso_week)
+        if week_error is not None:
+            return week_error
         try:
             week = store.load_week(slug, iso_week)
         except Exception as exc:  # noqa: BLE001

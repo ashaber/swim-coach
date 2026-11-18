@@ -164,12 +164,12 @@ from swim_coach.load import (
     ctl_atl_tsb_series,
     daily_loads,
 )
+from swim_coach.formatting import round_100
 from swim_coach.health_vocab import Restriction
 from swim_coach.models import Athlete, Event, Session, Wellness, Workout
 from swim_coach.plan import (
     RECOVERY_SESSION_MIN,
     _pool_day_offset,
-    _round_100,
     _z2_pace_s_per_100m,
 )
 
@@ -292,7 +292,7 @@ REST_DAY_CADENCE_DAYS = 3
 MIN_SESSION_DURATION_MIN = 15.0
 # Coach judgment: shortest duration this generator will still call a real
 # swim session rather than folding it into a rest day -- mirrors
-# `plan.py`'s own `max(_duration_min_for_distance(...), 15.0)` floor for its
+# `plan.py`'s own `max(duration_min_for_distance(...), 15.0)` floor for its
 # no-pool-coach pool sessions.
 
 MIN_TAPER_RUNWAY_DAYS = 2
@@ -1044,7 +1044,7 @@ def generate_taper_sessions(
     AU-per-minute assumption (`_duration_min_for_day_load`), floored at
     `MIN_SESSION_DURATION_MIN`; distance is derived from that duration via
     the athlete's own Z2 pace (`plan._z2_pace_s_per_100m`), rounded to the
-    nearest 100m (`plan._round_100`) for realism, matching how `plan.py`'s
+    nearest 100m (`formatting.round_100`) for realism, matching how `plan.py`'s
     own generators round distances.
 
     Every session's `purpose` field plainly states it is engine-proposed
@@ -1101,7 +1101,7 @@ def generate_taper_sessions(
                 taper_start_date=taper_start_date,
             )
             duration_min = max(MIN_SESSION_DURATION_MIN, _duration_min_for_day_load(day_load))
-            distance_m = max(0, _round_100(duration_min / 60 * 3600 / pace_s * 100))
+            distance_m = max(0, round_100(duration_min / 60 * 3600 / pace_s * 100))
             weekday_offset = day.weekday()
             sport = "swim_pool" if weekday_offset in pool_offsets else "swim_ow"
             sessions.append(

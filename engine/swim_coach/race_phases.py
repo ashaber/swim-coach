@@ -78,10 +78,10 @@ phase-by-phase, same as any other `[ADAPTED]` claim in this codebase.
 
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass
 
 from swim_coach import analytics
+from swim_coach.gps_laps import avg_speed_mps
 
 # Protzen et al. (2026) establishes THAT the start must be isolated; no
 # paper in the 2026-09-19 research pass reports a real, citable start-
@@ -146,34 +146,10 @@ def _slice_by_time(series: dict, start_s: float, end_s: float) -> dict:
     return {k: v[lo:hi + 1] for k, v in series.items() if isinstance(v, list)}
 
 
-def _avg_speed_mps(sliced: dict) -> float | None:
-    """Mean of `speed_mps` over the slice, ignoring `None`s; falls back to
-    distance-covered/duration via `dist_m` when `speed_mps` is absent or
-    entirely `None` within the slice. Deliberately duplicated (not
-    imported) from `gps_laps.py`'s identically-behaved helper -- that
-    module is a separate, unrelated, unmerged build; this module has no
-    dependency on it."""
-    speed = sliced.get("speed_mps")
-    if speed:
-        clean = [s for s in speed if s is not None]
-        if clean:
-            return statistics.fmean(clean)
-    dist = sliced.get("dist_m")
-    t_s = sliced.get("t_s")
-    if dist and t_s:
-        usable = [(t, d) for t, d in zip(t_s, dist) if d is not None]
-        if len(usable) >= 2:
-            (t0, d0), (t1, d1) = usable[0], usable[-1]
-            duration = t1 - t0
-            if duration > 0:
-                return (d1 - d0) / duration
-    return None
-
-
 def _phase(series: dict, name: str, start_s: float, end_s: float) -> RacePhase:
     sliced = _slice_by_time(series, start_s, end_s)
     np_w = analytics.normalized_power_w(sliced) if sliced else None
-    speed = _avg_speed_mps(sliced) if sliced else None
+    speed = avg_speed_mps(sliced) if sliced else None
     return RacePhase(
         name=name, start_s=start_s, end_s=end_s, duration_s=end_s - start_s,
         normalized_power_w=np_w, avg_speed_mps=speed,

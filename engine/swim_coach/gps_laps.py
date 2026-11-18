@@ -456,7 +456,7 @@ def _slice_series(series: dict, start_idx: int, end_idx: int) -> dict:
     return {k: v[start_idx:b] for k, v in series.items() if isinstance(v, list)}
 
 
-def _avg_speed_mps(sliced: dict) -> float | None:
+def avg_speed_mps(sliced: dict) -> float | None:
     """Mean of `speed_mps` over the slice, ignoring `None` samples. Falls
     back to distance-covered/duration via `dist_m` (first-to-last valid
     sample) when `speed_mps` is absent or every sample in it is `None`
@@ -519,7 +519,7 @@ def lap_metrics(series: dict, lap: GpsLap) -> GpsLapMetrics:
     sliced = _slice_series(series, lap.start_idx, lap.end_idx)
     norm_power = analytics.normalized_power_w(sliced)
     avg_power = analytics.average_power_w(sliced)
-    avg_speed = _avg_speed_mps(sliced)
+    avg_speed = avg_speed_mps(sliced)
 
     efficiency = None
     if norm_power is not None and norm_power > 0 and avg_speed is not None:

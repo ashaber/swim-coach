@@ -1,6 +1,6 @@
 """Real incident, prod 2026-10-10: `distance_m: 0` in a patch_week_plan session
 override on a bike session reset its duration to 15 min (the swim-pace
-re-estimate `max(_duration_min_for_distance(0, css), 15)` ran for a bike)."""
+re-estimate `max(duration_min_for_distance(0, css), 15)` ran for a bike)."""
 
 from __future__ import annotations
 

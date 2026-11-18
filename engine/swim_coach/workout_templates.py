@@ -27,6 +27,7 @@ from typing import Callable, Literal
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
+from swim_coach.formatting import format_pace_s, round_100
 from swim_coach.models import (
     Athlete,
     WorkoutRepeat,
@@ -111,20 +112,6 @@ class WorkoutTemplate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-def _format_pace_s(pace_s: float) -> str:
-    """Format a seconds-per-100m pace as M:SS (e.g. 92.3 -> '1:32').
-
-    Duplicated from `plan.py`'s private helper of the same name: this module
-    must not import `plan.py` at module load time (see `_validate_template_
-    semantics`'s docstring for why the reverse dependency is deferred/local
-    instead), and this formatter is a trivial, stable one-liner with zero
-    citation/review weight -- not worth a shared-utils module for.
-    """
-    total = int(round(pace_s))
-    minutes, seconds = divmod(total, 60)
-    return f"{minutes}:{seconds:02d}"
-
-
 _DEVICE_TITLE_MAX_LEN = 40
 
 
@@ -162,7 +149,7 @@ def short_device_title(purpose: str, max_len: int = _DEVICE_TITLE_MAX_LEN) -> st
 
 
 def _zone_range(zone: dict) -> str:
-    return f"{_format_pace_s(zone['pace_lo_s'])}-{_format_pace_s(zone['pace_hi_s'])}/100m"
+    return f"{format_pace_s(zone['pace_lo_s'])}-{format_pace_s(zone['pace_hi_s'])}/100m"
 
 
 # --- FORMAT_STRATEGIES --------------------------------------------------------
@@ -361,7 +348,6 @@ def _validate_template_semantics(template: WorkoutTemplate, file_path: Path) -> 
         ADDITIONAL_SWIM_MIN_COOL_DOWN_M,
         ADDITIONAL_SWIM_MIN_WARM_UP_M,
         ADDITIONAL_SWIM_WARM_UP_SHARE,
-        _round_100,
     )
     from swim_coach.zones import zone_table
 
@@ -375,11 +361,11 @@ def _validate_template_semantics(template: WorkoutTemplate, file_path: Path) -> 
 
                 warm_up = max(
                     ADDITIONAL_SWIM_MIN_WARM_UP_M,
-                    _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE),
+                    round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE),
                 )
                 cool_down_budget_estimate = max(
                     ADDITIONAL_SWIM_MIN_COOL_DOWN_M,
-                    _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE),
+                    round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE),
                 )
                 main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
 
@@ -911,7 +897,6 @@ def compute_facets(template: WorkoutTemplate) -> TemplateFacets:
         ADDITIONAL_SWIM_MIN_COOL_DOWN_M,
         ADDITIONAL_SWIM_MIN_WARM_UP_M,
         ADDITIONAL_SWIM_WARM_UP_SHARE,
-        _round_100,
     )
     from swim_coach.zones import zone_table
 
@@ -921,9 +906,9 @@ def compute_facets(template: WorkoutTemplate) -> TemplateFacets:
     zones = zone_table(css_pace_s)
     z2, z3, z4 = zones["Z2"], zones["Z3"], zones["Z4"]
 
-    warm_up = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, _round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE))
+    warm_up = max(ADDITIONAL_SWIM_MIN_WARM_UP_M, round_100(distance_m * ADDITIONAL_SWIM_WARM_UP_SHARE))
     cool_down_budget_estimate = max(
-        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, _round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
+        ADDITIONAL_SWIM_MIN_COOL_DOWN_M, round_100(distance_m * ADDITIONAL_SWIM_COOL_DOWN_SHARE)
     )
     main_set_budget = max(0, distance_m - warm_up - cool_down_budget_estimate)
 
