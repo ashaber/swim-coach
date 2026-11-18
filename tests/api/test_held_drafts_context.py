@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+from fakes import seed_generated_week
 from swim_coach.models import Event
 from swim_coach.plan import scaffold_macro
 from swim_coach.store import FileStore
@@ -36,7 +37,17 @@ def _setup(athletes_dir):
     store.save_macro("renee", macro)
     h["set_weekly_template"]({"template": TEMPLATE, "confirm": True})
     ws = next(b for b in macro.blocks if b.name in ("build", "peak", "base")).start_date + timedelta(weeks=1)
-    return store, h, _iso(ws)
+    iso = _iso(ws)
+    seed_generated_week(store, "renee", iso)  # a live week to edit
+    return store, h, iso
+
+
+def _patch_draft(h, store, iso):
+    target = next(s for s in store.load_week("renee", iso).sessions if s.sport == "bike")
+    return h["patch_week_plan"]({
+        "iso_week": iso,
+        "session_overrides": [{"date": target.date.isoformat(), "sport": "bike", "purpose": "agreed: easy spin"}],
+    })
 
 
 def _ctx(store):
@@ -50,29 +61,29 @@ def test_no_drafts_means_no_section(athletes_dir) -> None:
 
 def test_a_held_week_draft_is_shown_with_exactly_how_to_write_it(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": iso})
+    draft = _patch_draft(h, store, iso)
 
     text = _ctx(store)
 
     assert SECTION in text
     assert draft["draft_id"] in text and iso in text
-    assert '"confirm": true' in text and "replace_week_plan" in text
+    assert '"confirm": true' in text and "patch_week_plan" in text
     assert "do NOT say you cannot write it" in text
 
 
 def test_the_section_disappears_once_the_draft_is_written(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": iso})
+    draft = _patch_draft(h, store, iso)
     assert SECTION in _ctx(store)
 
-    h["replace_week_plan"]({"iso_week": iso, "confirm": True, "draft_id": draft["draft_id"]})
+    h["patch_week_plan"]({"iso_week": iso, "confirm": True, "draft_id": draft["draft_id"]})
 
     assert SECTION not in _ctx(store)
 
 
 def test_a_stale_draft_is_not_offered(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    h["replace_week_plan"]({"iso_week": iso})
+    _patch_draft(h, store, iso)
     old = store.load_week_draft("renee", iso).model_copy(update={"drafted_at": datetime.now(timezone.utc) - timedelta(days=2)})
     store.save_week_draft("renee", old)
     assert SECTION not in _ctx(store)
@@ -90,7 +101,7 @@ def test_held_draft_rendering_is_byte_stable_across_different_wall_clock_times(
     import app.drafts as drafts_module
 
     store, h, iso = _setup(athletes_dir)
-    h["replace_week_plan"]({"iso_week": iso})
+    _patch_draft(h, store, iso)
 
     real_datetime = drafts_module.datetime
 
@@ -128,10 +139,19 @@ def test_a_macro_draft_is_described(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store = FileStore(base_dir=athletes_dir)
     h = build_tool_handlers(store, slug="renee", expert_mode=False)
-    draft = h["replace_macro_plan"]({"event_name": "UltraSwim 33.3 Greece (Skopelos) — single-day 33.3 km continuous",
-                                     "current_weekly_volume_m": 18000, "start_date": "2026-01-05"})
+    start = date(2026, 7, 6)
+    weeks = [
+        {"week_start": (start + timedelta(weeks=i)).isoformat(), "phase": "Base", "focus": "aerobic base",
+         "hours": 8.0 + i, "load_tss": 400.0 + i * 20, "ctl_target": 40.0 + i * 2,
+         "key_sessions": [], "recovery": False, "notes": None}
+        for i in range(3)
+    ]
+    draft = h["author_macro_plan"]({
+        "event_names": ["UltraSwim 33.3 Greece (Skopelos) — single-day 33.3 km continuous"],
+        "weeks": weeks, "architecture": "Base toward Greece.",
+    })
     text = _ctx(store)
-    assert draft["draft_id"] in text and "MACRO plan" in text and "replace_macro_plan" in text
+    assert draft["draft_id"] in text and "MACRO plan" in text and "author_macro_plan" in text
 
 
 def test_the_prompt_no_longer_tells_the_coach_it_cannot_write_plans() -> None:

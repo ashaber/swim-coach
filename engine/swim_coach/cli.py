@@ -79,6 +79,13 @@ from swim_coach.parse_files import (
 )
 from swim_coach.plan import generate_week, scaffold_macro
 from swim_coach.plan_check import check_macro
+from swim_coach.projection import (
+    TrainingScenario,
+    compare_scenarios,
+    project_macro,
+    project_scenario,
+    split_load_per_hour,
+)
 from swim_coach.provision import provision_athlete
 from swim_coach.quality import match_workout_to_session, workout_quality
 from swim_coach.research_queue import (
@@ -619,6 +626,80 @@ def _cmd_check_macro(args: argparse.Namespace, store: StoreInterface) -> int:
         today=as_of,
     )
     print(json.dumps({"athlete": slug, "as_of": as_of.isoformat(), **report.to_dict()}))
+    return 0
+
+
+def _parse_scenario(spec: str) -> TrainingScenario:
+    """`name:days:hours[:hard_sessions]` -> TrainingScenario."""
+    parts = spec.split(":")
+    if not 3 <= len(parts) <= 4:
+        raise ValueError(f"scenario {spec!r} must look like name:days:hours[:hard]")
+    fields: dict = {"name": parts[0], "days_per_week": int(parts[1]), "hours_per_week": float(parts[2])}
+    if len(parts) == 4:
+        fields["hard_sessions_per_week"] = int(parts[3])
+    return TrainingScenario(**fields)
+
+
+def _with_taper(scenario: TrainingScenario, spec: str | None) -> TrainingScenario:
+    """Apply a `weeks:reduction` taper (the last `weeks` of the horizon) to a scenario."""
+    if spec is None:
+        return scenario
+    weeks, _, reduction = spec.partition(":")
+    if not reduction:
+        raise ValueError(f"taper {spec!r} must look like weeks:reduction")
+    return TrainingScenario(
+        **{**scenario.model_dump(), "taper_weeks": int(weeks), "taper_reduction": float(reduction)}
+    )
+
+
+def _cmd_project(args: argparse.Namespace, store: StoreInterface) -> int:
+    """Compare hypothetical training scenarios (and optionally the stored macro) on projected
+    load and freshness -- `swim_coach.projection`; prints one JSON comparison, writes nothing."""
+    slug = args.athlete
+    try:
+        athlete = store.load_athlete(slug)
+        events = store.load_events(slug)
+        scenarios = [_with_taper(_parse_scenario(spec), args.taper) for spec in args.scenario]
+    except Exception as exc:  # noqa: BLE001
+        return _error(f"scenario or athlete data invalid: {exc}")
+    as_of = athlete_today(athlete)
+    start = as_of - timedelta(days=as_of.weekday())
+    end = date.fromisoformat(args.until) if args.until else start + timedelta(weeks=args.weeks) - timedelta(days=1)
+    workouts = store.list_workouts(slug)
+    wellness = store.list_wellness(slug)
+    series = ctl_atl_tsb_series(daily_loads(workouts, athlete=athlete, wellness=wellness))
+    common = dict(
+        current_ctl=series[-1][1] if series else 0.0,
+        current_atl=series[-1][2] if series else None,
+        start=start,
+        end=end,
+        events=events,
+        recent_weekly_hours=_recent_weekly_hours(workouts, as_of),
+        recent_tss_per_hour=_recent_tss_per_hour(workouts, as_of, athlete=athlete, wellness=wellness),
+        today=as_of,
+    )
+    split = split_load_per_hour(workouts, as_of, athlete=athlete, wellness=wellness)
+    rates = {"tss_per_hour_easy": split[0], "tss_per_hour_hard": split[1]} if split else {}
+    try:
+        projections = [project_scenario(s, athlete, **common, **rates) for s in scenarios]
+        if args.include_current_plan:
+            macro = store.load_macro(slug)
+            if macro is None:
+                return _error("no macro plan for this athlete; drop --include-current-plan")
+            projections.insert(0, project_macro(macro, athlete, **common))
+        comparison = compare_scenarios(projections)
+    except ValueError as exc:
+        return _error(str(exc))
+    print(
+        json.dumps(
+            {
+                "athlete": slug,
+                "as_of": as_of.isoformat(),
+                "comparison": comparison.model_dump(mode="json"),
+                "projections": [p.to_summary() for p in projections],
+            }
+        )
+    )
     return 0
 
 
@@ -1813,6 +1894,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check_macro.add_argument("--as-of", dest="as_of", help="YYYY-MM-DD, default today")
 
+    p_project = subparsers.add_parser(
+        "project", help="compare training scenarios on projected load and freshness (advisory only)"
+    )
+    p_project.add_argument("--athlete", required=True)
+    p_project.add_argument(
+        "--scenario", action="append", required=True, help="name:days:hours[:hard_sessions], repeatable"
+    )
+    horizon = p_project.add_mutually_exclusive_group()
+    horizon.add_argument("--weeks", type=int, default=12, help="projection length in weeks (default 12)")
+    horizon.add_argument("--until", help="YYYY-MM-DD end of projection")
+    p_project.add_argument(
+        "--taper", help="weeks:reduction taper applied to every scenario, over the last weeks of the horizon"
+    )
+    p_project.add_argument(
+        "--include-current-plan", dest="include_current_plan", action="store_true",
+        help="add the athlete's stored macro plan to the comparison",
+    )
+
     p_parse_coach_text = subparsers.add_parser(
         "parse-coach-text",
         help="save a pool-coach workout text verbatim and deterministically parse it",
@@ -2041,6 +2140,7 @@ _COMMANDS = {
     "summarize": _cmd_summarize,
     "adapt": _cmd_adapt,
     "check-macro": _cmd_check_macro,
+    "project": _cmd_project,
     "parse-coach-text": _cmd_parse_coach_text,
     "ingest": _cmd_ingest,
     "analyze": _cmd_analyze,

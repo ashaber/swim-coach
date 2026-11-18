@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 
+from fakes import seed_generated_week
 from swim_coach.models import Event
 from swim_coach.plan import scaffold_macro
 from swim_coach.store import FileStore
@@ -47,28 +48,36 @@ def _setup(athletes_dir):
     store.save_macro("renee", macro)
     h["set_weekly_template"]({"template": {"tue": [{"kind": "bike", "role": "hard"}]}, "confirm": True})
     ws = next(b for b in macro.blocks if b.name in ("build", "peak", "base")).start_date + timedelta(weeks=1)
-    return store, h, _iso(ws)
+    iso = _iso(ws)
+    seed_generated_week(store, "renee", iso)  # a live week to edit
+    return store, h, iso
+
+
+def _edit(store, iso):
+    target = next(s for s in store.load_week("renee", iso).sessions if s.sport == "bike")
+    return [{"date": target.date.isoformat(), "sport": "bike", "purpose": "agreed: easy spin"}]
 
 
 def test_a_draft_that_cannot_be_stored_does_not_break_drafting(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": iso})
+    draft = h["patch_week_plan"]({"iso_week": iso, "session_overrides": _edit(store, iso)})
     assert "error" not in draft and draft["persisted"] is False and draft["sessions"]
     assert "draft_id" not in draft  # nothing could be held, and the response does not pretend otherwise
 
 
 def test_confirm_still_writes_when_draft_storage_is_down_and_says_it_was_one_step(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    done = h["replace_week_plan"]({"iso_week": iso, "confirm": True})
+    done = h["patch_week_plan"]({"iso_week": iso, "confirm": True, "session_overrides": _edit(store, iso)})
     assert done["persisted"] is True and not done.get("written_from_draft")
     assert any("ONE step" in w for w in done["planning_warnings"])
 
 
 def test_a_named_draft_that_cannot_be_read_writes_nothing_and_says_so(athletes_dir) -> None:
     store, h, iso = _setup(athletes_dir)
-    done = h["replace_week_plan"]({"iso_week": iso, "confirm": True, "draft_id": str(uuid.uuid4())})
+    before = store.load_week("renee", iso)
+    done = h["patch_week_plan"]({"iso_week": iso, "confirm": True, "draft_id": str(uuid.uuid4())})
     assert done["persisted"] is False and "draft" in done["error"].lower()
-    assert store.load_week("renee", iso) is None
+    assert store.load_week("renee", iso) == before
 
 
 def test_the_held_drafts_context_section_survives_a_storage_error(athletes_dir) -> None:

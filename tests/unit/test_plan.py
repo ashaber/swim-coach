@@ -3040,7 +3040,7 @@ def test_generate_week_bike_primary_final_taper_week_no_floor_or_checklist_for_b
 # --- race week: qualifying event resolved from the covering block, not the --------
 # single `event` param (IDEA 019, corrected 2026-09-19 -- empirically
 # verified against Andrew's real, live season macro). Real callers
-# (create_week_plan/replace_week_plan, backend/app/tools.py) always resolve
+# (merge_week_plan regenerate, backend/app/tools.py) always resolve
 # `event = macro.event_id`'s event, and MacroPlan.event_id's own documented
 # convention is "the LAST race in the season" for any season-spanning
 # macro -- so `event` was ALWAYS the season finale for every week generated

@@ -923,7 +923,7 @@ function renderMacroSection(macro, event, weeks, events) {
 
   // Interleave a marker card for EVERY race the macro is aware of, not just
   // one appended at the very end -- Andrew, live, 2026-09-17: a season-
-  // spanning macro (`draft_season_macro_plan`) only ever showed its single
+  // spanning macro (a multi-race macro) only ever showed its single
   // final target race, even though every earlier race it plans around
   // (`macro.event_ids`) is real, known data. Each race's card goes right
   // after the last training block that has already STARTED by its date --

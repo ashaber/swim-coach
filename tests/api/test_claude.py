@@ -91,14 +91,14 @@ def test_run_streaming_max_iterations_guard() -> None:
 
 def test_max_iterations_yields_coach_voiced_text_alongside_error_and_warns(capsys) -> None:
     # Build E: real incident, prod 2026-09-11 -- a "remove this session"
-    # request retried replace_week_plan 5 times (genuine retries, input
+    # request retried patch_week_plan 5 times (genuine retries, input
     # tokens growing each turn) and surfaced only a bare
     # `{"error": "max tool iterations exceeded"}`, zero information for the
     # athlete. The streaming path must now ALSO yield a normal-rendering
     # "text" event with a coach-voiced explanation before the error event,
     # and the WARN log must carry tools_invoked across ALL iterations.
     settings = _settings()
-    tool_use_1 = make_tool_use_block("t1", "replace_week_plan", {"iso_week": "2026-W30"})
+    tool_use_1 = make_tool_use_block("t1", "patch_week_plan", {"iso_week": "2026-W30"})
     tool_use_2 = make_tool_use_block("t2", "propose_adaptation", {})
     turns = [
         ([], make_final_message([tool_use_1], "tool_use")) if i % 2 == 0
@@ -109,14 +109,14 @@ def test_max_iterations_yields_coach_voiced_text_alongside_error_and_warns(capsy
     chat = ClaudeChat(settings, client=client)
 
     handlers = {
-        "replace_week_plan": lambda _input: {"error": "still broken"},
+        "patch_week_plan": lambda _input: {"error": "still broken"},
         "propose_adaptation": lambda _input: {"error": "still broken too"},
     }
     events = list(
         chat.run_streaming(
             [],
             [{"role": "user", "content": "remove Wednesday's strength session"}],
-            [{"name": "replace_week_plan"}, {"name": "propose_adaptation"}],
+            [{"name": "patch_week_plan"}, {"name": "propose_adaptation"}],
             handlers,
         )
     )
@@ -141,7 +141,7 @@ def test_max_iterations_yields_coach_voiced_text_alongside_error_and_warns(capsy
     ]
     warn = next(r for r in logged if r["level"] == "warn" and r["msg"] == "max tool iterations exceeded")
     assert warn["max_iterations"] == MAX_TOOL_ITERATIONS
-    assert "replace_week_plan" in warn["tools_invoked"]
+    assert "patch_week_plan" in warn["tools_invoked"]
     assert "propose_adaptation" in warn["tools_invoked"]
     assert len(warn["tools_invoked"]) == MAX_TOOL_ITERATIONS
 
@@ -152,15 +152,15 @@ def test_tool_call_input_and_error_flag_are_logged_every_iteration(capsys) -> No
     # with a per-tool-call log line: tool name, a bounded input summary,
     # and whether the result carried an "error" key.
     settings = _settings()
-    tool_use = make_tool_use_block("t1", "replace_week_plan", {"iso_week": "2026-W30", "confirm": False})
+    tool_use = make_tool_use_block("t1", "patch_week_plan", {"iso_week": "2026-W30", "confirm": False})
     turns = [([], make_final_message([tool_use], "tool_use")) for _ in range(MAX_TOOL_ITERATIONS)]
     client = FakeAnthropicClient(turns)
     chat = ClaudeChat(settings, client=client)
 
-    handlers = {"replace_week_plan": lambda _input: {"error": "still broken"}}
+    handlers = {"patch_week_plan": lambda _input: {"error": "still broken"}}
     list(
         chat.run_streaming(
-            [], [{"role": "user", "content": "x"}], [{"name": "replace_week_plan"}], handlers
+            [], [{"role": "user", "content": "x"}], [{"name": "patch_week_plan"}], handlers
         )
     )
 
@@ -171,7 +171,7 @@ def test_tool_call_input_and_error_flag_are_logged_every_iteration(capsys) -> No
     ]
     assert len(logged) == MAX_TOOL_ITERATIONS
     for i, entry in enumerate(logged):
-        assert entry["tool"] == "replace_week_plan"
+        assert entry["tool"] == "patch_week_plan"
         assert entry["iteration"] == i
         assert entry["had_error"] is True
         assert "2026-W30" in entry["input_summary"]
@@ -199,18 +199,18 @@ def test_tool_call_log_had_error_false_on_success(capsys) -> None:
 
 def test_tool_call_log_carries_the_real_error_text_not_just_the_boolean(capsys) -> None:
     # Real incident, 2026-09-18: `had_error` alone was enough to see THAT
-    # replace_week_plan kept failing, but root-causing WHY required
+    # patch_week_plan kept failing, but root-causing WHY required
     # reconstructing the failure from a truncated `input_summary` with no
     # error text at all -- this closes that gap.
     settings = _settings()
-    tool_use = make_tool_use_block("t1", "replace_week_plan", {"iso_week": "2026-W30"})
+    tool_use = make_tool_use_block("t1", "patch_week_plan", {"iso_week": "2026-W30"})
     final = make_final_message([tool_use], "tool_use")
     end_final = make_final_message([make_text_block("done")], "end_turn")
     client = FakeAnthropicClient([([], final), (["done"], end_final)])
     chat = ClaudeChat(settings, client=client)
 
-    handlers = {"replace_week_plan": lambda _input: {"error": "no such week: 2026-W30"}}
-    list(chat.run_streaming([], [{"role": "user", "content": "x"}], [{"name": "replace_week_plan"}], handlers))
+    handlers = {"patch_week_plan": lambda _input: {"error": "no such week: 2026-W30"}}
+    list(chat.run_streaming([], [{"role": "user", "content": "x"}], [{"name": "patch_week_plan"}], handlers))
 
     logged = [
         json.loads(line)
@@ -295,7 +295,7 @@ def test_max_tokens_stop_reason_appends_visible_marker_and_warns(capsys) -> None
 
     events = list(
         chat.run_streaming(
-            [], [{"role": "user", "content": "redraft this week"}], [{"name": "create_week_plan"}], {}
+            [], [{"role": "user", "content": "redraft this week"}], [{"name": "author_week_plan"}], {}
         )
     )
 
@@ -318,7 +318,7 @@ def test_max_tokens_stop_reason_appends_visible_marker_and_warns(capsys) -> None
     warn = next(r for r in logged if r["level"] == "warn" and r["msg"] == "turn hit max_tokens")
     assert warn["output_tokens"] == 16384
     assert warn["iteration"] == 0
-    assert "create_week_plan" in warn["tools_available"]
+    assert "author_week_plan" in warn["tools_available"]
 
 
 def test_max_tokens_marker_not_emitted_on_normal_end_turn() -> None:
