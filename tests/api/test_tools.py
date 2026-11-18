@@ -15,7 +15,7 @@ import uuid
 
 import httpx
 import pytest
-from fakes import SpyFeedbackStore, make_workout
+from fakes import SpyFeedbackStore, make_workout, seed_generated_week
 from swim_coach.models import (
     Event,
     HealthStatus,
@@ -23,7 +23,6 @@ from swim_coach.models import (
     MacroPlan,
     Session,
     WeekPlan,
-    Workout,
     WorkoutAnalytics,
     WorkoutLap,
     WorkoutPause,
@@ -32,13 +31,14 @@ from swim_coach.models import (
     WorkoutTarget,
 )
 from swim_coach import fueling as fueling_module
-from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, _monday_of_week, generate_week
+from swim_coach.plan import SESSION_ADJUSTMENT_INCREASE_CAP_PCT, generate_week, scaffold_macro
 from swim_coach.store import FileStore
 
 from app.tools import (
     GET_WORKOUTS_CAP,
     SYNC_WORKOUTS_WINDOW_DAYS,
     TOOLS_SCHEMA,
+    _week_sessions_json,
     build_tool_handlers,
     format_macro_plan_table,
     format_week_plan_table,
@@ -89,7 +89,7 @@ def test_propose_adaptation_invalid_iso_week_is_an_error(athletes_dir) -> None:
 
 
 def test_propose_adaptation_prior_week_predating_macro_is_a_calm_error(athletes_dir) -> None:
-    # Regression test for tonight's real bug: after replace_macro_plan moves
+    # Regression test for tonight's real bug: after a macro replacement moves
     # the macro to a new event with a later start date, an OLD week plan
     # from before that start date can still be sitting on disk. Simulate
     # that here -- a week file at 2026-W27 (the real macro's base block
@@ -108,7 +108,7 @@ def test_propose_adaptation_prior_week_predating_macro_is_a_calm_error(athletes_
     assert "error" in result
     assert "predates the current macro" in result["error"]
     assert "2026-07-06" in result["error"]  # macro's actual start date
-    assert "create_week_plan" in result["error"]
+    assert "author_week_plan" in result["error"]
     assert "2026-W28" in result["error"]
 
 
@@ -119,7 +119,7 @@ def test_propose_adaptation_prior_week_after_macro_end_points_at_a_new_macro(ath
     # raced and is asking about a week beyond the whole plan. Found during
     # review: the original single-branch check reused the "predates" message
     # verbatim for this case too, wrongly claiming the macro "starts
-    # 2026-07-06" and directing to create_week_plan -- which would itself
+    # 2026-07-06" and directing to author_week_plan -- which would itself
     # refuse for the exact same range reason, trading one dead end for
     # another. Confirm the message here is accurate (says the macro *ends*,
     # not "predates"/"starts") and points at building a new macro instead.
@@ -139,7 +139,7 @@ def test_propose_adaptation_prior_week_after_macro_end_points_at_a_new_macro(ath
     assert "falls after" in result["error"]
     assert "predates" not in result["error"]
     assert "2026-09-13" in result["error"]  # macro's actual end date
-    assert "draft_macro_plan" in result["error"] or "replace_macro_plan" in result["error"]
+    assert "author_macro_plan" in result["error"]
     assert "2026-W40" in result["error"]
 
 
@@ -2221,11 +2221,9 @@ def test_create_event_unsupported_primary_sport_is_kept_as_a_note_not_an_error(a
 
 
 def _bike_macro_via_tools(handlers, store, run_tag, event_name_suffix="Century") -> tuple[str, dict]:
-    """Shared setup for the two regression tests below: create_event
-    (primary_sport="bike") then draft_macro_plan, both via the real tool
-    handlers (not a hand-built fixture) -- returns (first_iso_week,
-    create_week_plan-ready state). Mirrors the exact real-world sequence a
-    coach session would run."""
+    """Shared setup for the bike-week tests: create_event (primary_sport="bike") through the real
+    tool handler, then an engine-scaffolded macro toward it saved to the store. Returns
+    (first_iso_week, {"event": Event})."""
     name = f"Test Bike {event_name_suffix} [{run_tag}]"
     create_result = handlers["create_event"](
         {
@@ -2239,1290 +2237,24 @@ def _bike_macro_via_tools(handlers, store, run_tag, event_name_suffix="Century")
     )
     assert "error" not in create_result, create_result
 
-    macro_result = handlers["draft_macro_plan"](
-        {
-            "event_name": name,
-            "current_weekly_volume_m": 200,
-            "peak_weekly_volume_m": 600,
-            # A Monday after renee's existing week-plan fixture files
-            # (2026-W28/W29) so this macro's first week doesn't collide with
-            # an already-persisted week.
-            "start_date": "2026-09-07",
-        }
-    )
-    assert "error" not in macro_result, macro_result
-
-    first_block_start = date.fromisoformat(macro_result["blocks"][0]["start_date"])
-    year, week, _ = first_block_start.isocalendar()
-    iso_week = f"{year}-W{week:02d}"
-    return iso_week, macro_result
-
-
-def test_create_event_bike_then_create_week_plan_produces_real_bike_sessions(
-    athletes_dir, run_tag
-) -> None:
-    """The exact bug this build fixes: `_handle_create_week_plan` used to
-    call `generate_week` with NO primary_sport/ftp_watts at all, so creating
-    the first week of a bike-primary macro silently produced a full swim
-    week (pool placeholders, long-swim ladder) instead of real bike
-    sessions. Proven end-to-end via the real tool chain: create_event
-    (primary_sport="bike") -> draft_macro_plan -> create_week_plan."""
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    iso_week, _macro_result = _bike_macro_via_tools(handlers, store, run_tag, "CWP Century")
-
-    result = handlers["create_week_plan"]({"iso_week": iso_week})
-    assert "error" not in result, result
-    assert len(result["sessions"]) > 0
-
-    sports = {s["sport"] for s in result["sessions"]}
-    assert "bike" in sports
-    assert "swim_pool" not in sports
-    assert "swim_ow" not in sports
-    # strength is the only non-bike sport a bike-primary week legitimately
-    # includes (see plan.py's bike-strength-placement fix, PR #167 Finding 3).
-    assert sports <= {"bike", "strength"}
-
-
-def test_create_event_bike_then_replace_week_plan_produces_real_bike_sessions(
-    athletes_dir, run_tag
-) -> None:
-    """Same bug, `_handle_replace_week_plan` call site -- proven separately
-    per this build's own verification discipline, not assumed identical just
-    because the two handlers look alike."""
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    iso_week, _macro_result = _bike_macro_via_tools(handlers, store, run_tag, "RWP Century")
-
-    result = handlers["replace_week_plan"]({"iso_week": iso_week, "confirm": True})
-    assert "error" not in result, result
-    assert len(result["sessions"]) > 0
-
-    sports = {s["sport"] for s in result["sessions"]}
-    assert "bike" in sports
-    assert "swim_pool" not in sports
-    assert "swim_ow" not in sports
-    assert sports <= {"bike", "strength"}
-
-
-def test_create_week_plan_swim_event_primary_sport_threading_is_byte_identical(athletes_dir) -> None:
-    """Event.primary_sport defaults to "swim" -- every existing swim event
-    (no primary_sport key in events.yaml) reads exactly that default, so
-    this build's primary_sport=/ftp_watts= threading through
-    `_handle_create_week_plan` must be provably a no-op for the swim path
-    this whole app runs on today. Proven by comparing the tool handler's new
-    output against the exact positional-only `generate_week` call this
-    handler made BEFORE the fix (no primary_sport/ftp_watts kwargs at all,
-    matching the pre-fix source)."""
-    store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
-    macro = store.load_macro("renee")
-    events = store.load_events("renee")
-    event = next(e for e in events if e.id == macro.event_id)
-    assert event.primary_sport == "swim"  # every real events.yaml today has no primary_sport key
-
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    new_result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
-    assert "error" not in new_result
-
-    week_start = date.fromisocalendar(2026, 30, 1)
-    event_format = event.event_format or "single_day"
-    old_week = generate_week(athlete, macro, "2026-W30", week_start, event_format, None, event)
-    old_sessions = [
-        {
-            "date": s.date.isoformat(),
-            "sport": s.sport,
-            "source": s.source,
-            "distance_m": s.distance_m,
-            "duration_min": s.duration_min,
-            "purpose": s.purpose,
-        }
-        for s in old_week.sessions
-    ]
-
-    assert new_result["target_volume_m"] == old_week.target_volume_m
-    assert new_result["meso_block"] == old_week.meso_block
-    assert new_result["focus"] == old_week.focus
-    assert new_result["sessions"] == old_sessions
-
-
-# --- draft_macro_plan -----------------------------------------------------------
-
-
-def test_draft_macro_plan_persists_new_macro_for_a_brand_new_event(athletes_dir, run_tag) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    name = f"Test Macro Event [{run_tag}]"
-    handlers["create_event"](
-        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
-    )
-
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": name,
-            "current_weekly_volume_m": 15000,
-            "start_date": "2027-01-01",
-        }
-    )
-
-    assert "error" not in result
-    assert result["created"] is True
-    assert result["event_name"] == name
-    assert len(result["blocks"]) == 4
-    block_names = [b["name"] for b in result["blocks"]]
-    assert block_names == ["base", "build", "peak", "taper"]
-    for block in result["blocks"]:
-        assert block["weekly_volume_target_m"] >= 0
-
-    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded_macro is not None
-    events = FileStore(base_dir=athletes_dir).load_events("renee")
-    new_event = next(e for e in events if e.name == name)
-    assert reloaded_macro.event_id == new_event.id
-
-
-def test_draft_macro_plan_refuses_when_macro_already_exists_for_event(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["draft_macro_plan"](
-        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 15000}
-    )
-
-    assert "error" in result
-    assert "already exists" in result["error"]
-
-    # Untouched -- still the original macro tied to Greece.
-    macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-    events = FileStore(base_dir=athletes_dir).load_events("renee")
-    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
-    assert macro.event_id == greece.id
-
-
-def test_draft_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["draft_macro_plan"](
-        {"event_name": "No Such Event At All", "current_weekly_volume_m": 15000}
-    )
-
-    assert "error" in result
-    assert GREECE_EVENT_NAME in result["error"]
-    assert "Bear Lake Monster 10K (Garden City UT, point-to-point)" in result["error"]
-
-
-def test_draft_macro_plan_insufficient_runway_is_an_error(athletes_dir, run_tag) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    name = f"Test Sprint Event [{run_tag}]"
-    handlers["create_event"](
-        {"name": name, "event_date": "2027-01-15", "distance_m": 5000, "priority": "B"}
-    )
-
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": name,
-            "current_weekly_volume_m": 10000,
-            "start_date": "2027-01-01",
-        }
-    )
-
-    assert "error" in result
-    # No macro should have been persisted by a failed scaffold attempt.
-    assert FileStore(base_dir=athletes_dir).load_macro("renee") is not None
-
-
-def test_draft_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["draft_macro_plan"]({"event_name": GREECE_EVENT_NAME})
-    assert "error" in result
-
-
-def test_draft_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["draft_macro_plan"]({"current_weekly_volume_m": 15000})
-    assert "error" in result
-
-
-# --- draft_macro_plan: three-way shape selection (sharpening-macro build) -----------
-#
-# `athletes/andrew` is a real, git-committed sandbox athlete tree (distinct
-# from `athletes/renee`'s realistic production-shaped fixture) -- used here
-# so these tests can construct their own real, deterministic training-load
-# fixture (rather than depending on renee's own real logged history, which
-# these tests don't control and shouldn't assume the exact shape of).
-
-_SHARPENING_AS_OF = date(2026, 9, 7)  # a Monday
-
-
-def _log_consistent_bike_history(store: FileStore, slug: str, athlete_id, *, weeks: int, as_of: date) -> None:
-    """Writes `weeks` trailing weeks of real, consistent (not single-spike)
-    bike workouts (3x/week) ending at `as_of` -- the same fixture shape
-    `tests/unit/test_load.py`'s `_consistent_daily_loads` uses, but through
-    the real store/Workout path so it exercises the real
-    `store.list_workouts` -> `daily_loads` -> `has_established_training_
-    base` pipeline `_handle_draft_macro_plan` actually calls."""
-    for w in range(weeks):
-        for offset in (2, 4, 6):
-            store.save_workout(
-                slug,
-                Workout(
-                    id=uuid.uuid4(),
-                    athlete_id=athlete_id,
-                    date=as_of - timedelta(days=w * 7 + offset),
-                    sport="bike",
-                    source="manual",
-                    distance_m=0,
-                    duration_min=60.0,
-                    rpe=5,
-                ),
-            )
-
-
-def _clear_workouts(athletes_dir, slug: str) -> None:
-    workouts_dir = athletes_dir / slug / "logs" / "workouts"
-    for f in workouts_dir.glob("*.yaml"):
-        f.unlink()
-
-
-def test_draft_macro_plan_established_base_and_short_bike_runway_uses_sharpening_shape(
-    athletes_dir,
-) -> None:
-    # Mandatory correctness property #3 (real reproduction of Andrew's
-    # actual scenario): an athlete with several months of real logged
-    # training history, a bike event ~5 weeks out, target_metric=
-    # "duration_min" -- draft_macro_plan must succeed via
-    # scaffold_sharpening_macro instead of refusing, with the response
-    # transparently stating why.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-
-    events = store.load_events(slug)
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="CX Regional Championship",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
-            target_metric="duration_min",
-            distance_m=None,
-            target_value=120.0,
-            priority="A",
-            primary_sport="bike",
-        )
-    )
-    store.save_events(slug, events)
-
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": "CX Regional Championship",
-            "current_weekly_volume_m": 200,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" not in result
-    assert result["created"] is True
-    assert result["shape"] == "hold_sharpen_taper"
-    assert "established base" in result["shape_reason"]
-    assert result["weeks_available"] == 5
-    evidence = result["established_base_evidence"]
-    assert evidence["established"] is True
-    assert evidence["weeks_with_load"] == evidence["lookback_weeks"]  # dense, real history
-    assert evidence["ctl_at_as_of"] > 0
-    block_names = [b["name"] for b in result["blocks"]]
-    assert block_names == ["sharpen", "taper"]  # no hold at exactly 5 weeks of runway
-
-    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert reloaded_macro is not None
-    assert [b.name for b in reloaded_macro.blocks] == ["sharpen", "taper"]
-
-
-def test_draft_macro_plan_no_training_history_refuses_even_with_short_bike_runway(
-    athletes_dir,
-) -> None:
-    # The inverse of the test above, mandated by the same brief: an athlete
-    # with NO real training history and the same short runway must still
-    # get the honest refusal -- the sharpening shape must never fire for
-    # someone who doesn't actually have a base.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)  # no history at all
-    macro_before = store.load_macro(slug)  # andrew's fixture tree ships one, unrelated event
-
-    events = store.load_events(slug)
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="CX Regional Championship No History",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
-            target_metric="duration_min",
-            distance_m=None,
-            target_value=120.0,
-            priority="A",
-            primary_sport="bike",
-        )
-    )
-    store.save_events(slug, events)
-
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": "CX Regional Championship No History",
-            "current_weekly_volume_m": 200,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" in result
-    assert "need at least 8" in result["error"]
-    # No new macro persisted by the failed attempt -- whatever was on file
-    # before (tied to a different, unrelated event) is untouched.
-    assert FileStore(base_dir=athletes_dir).load_macro(slug) == macro_before
-
-
-def test_draft_macro_plan_established_base_but_runway_below_sharpening_floor_refuses(
-    athletes_dir,
-) -> None:
-    # Established base, but weeks_available < SHARPENING_MIN_MACRO_WEEKS --
-    # neither shape fits; reuses scaffold_macro's own refusal unchanged.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-
-    events = store.load_events(slug)
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="CX Too Soon",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=3),
-            target_metric="duration_min",
-            distance_m=None,
-            target_value=120.0,
-            priority="A",
-            primary_sport="bike",
-        )
-    )
-    store.save_events(slug, events)
-
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": "CX Too Soon",
-            "current_weekly_volume_m": 200,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" in result
-    assert "need at least 8" in result["error"]
-
-
-def test_draft_macro_plan_established_base_and_short_runway_swim_event_still_refuses(
-    athletes_dir,
-) -> None:
-    # Sharpening-macro build scope: bike-primary events only for now. An
-    # established base + short runway for a SWIM-primary event must still
-    # get the honest refusal, not the sharpening shape -- generate_week's
-    # swim path was never extended to understand "hold"/"sharpen" blocks.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    for w in range(20):
-        for offset in (2, 4, 6):
-            store.save_workout(
-                slug,
-                Workout(
-                    id=uuid.uuid4(),
-                    athlete_id=athlete.id,
-                    date=_SHARPENING_AS_OF - timedelta(days=w * 7 + offset),
-                    sport="swim_pool",
-                    source="manual",
-                    distance_m=3000,
-                    duration_min=60.0,
-                    rpe=5,
-                ),
-            )
-
-    events = store.load_events(slug)
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="Swim Short Runway",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
-            distance_m=5000,
-            priority="A",
-            # primary_sport defaults to "swim"
-        )
-    )
-    store.save_events(slug, events)
-
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": "Swim Short Runway",
-            "current_weekly_volume_m": 9000,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" in result
-    assert "need at least 8" in result["error"]
-
-
-def test_draft_macro_plan_long_runway_still_uses_standard_shape_unaffected(athletes_dir) -> None:
-    # Zero regression: an event with >= MIN_MACRO_WEEKS of runway must
-    # still get the exact standard-shape response as before this build,
-    # now with the new (additive) shape/shape_reason/weeks_available
-    # fields alongside it.
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": GREECE_EVENT_NAME + " Doesn't Exist",
-            "current_weekly_volume_m": 15000,
-        }
-    )
-    assert "error" in result  # sanity: confirms the fixture event name below is real
-    handlers["create_event"](
-        {
-            "name": "Zero Regression Long Runway Event",
-            "event_date": "2027-06-01",
-            "distance_m": 20000,
-            "priority": "B",
-        }
-    )
-    result = handlers["draft_macro_plan"](
-        {
-            "event_name": "Zero Regression Long Runway Event",
-            "current_weekly_volume_m": 15000,
-            "start_date": "2027-01-01",
-        }
-    )
-    assert "error" not in result
-    assert result["shape"] == "base_build_peak_taper"
-    assert result["established_base_evidence"] is None
-    assert [b["name"] for b in result["blocks"]] == ["base", "build", "peak", "taper"]
-
-
-def test_draft_macro_plan_shape_is_independent_of_which_goal_is_being_planned(athletes_dir) -> None:
-    # Mandatory correctness property #2, exercised end-to-end through the
-    # real tool handler (not just the bare engine function): the same real
-    # logged history, evaluated at the same start date, must produce the
-    # same shape decision regardless of which event/goal is passed in.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-
-    events = store.load_events(slug)
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="Cyclocross Regional Championship",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
-            target_metric="duration_min",
-            distance_m=None,
-            target_value=120.0,
-            priority="A",
-            primary_sport="bike",
-        )
-    )
-    events.append(
-        Event(
-            id=uuid.uuid4(),
-            athlete_id=athlete.id,
-            name="December MTB Enduro",
-            event_date=_SHARPENING_AS_OF + timedelta(weeks=5),
-            target_metric="duration_min",
-            distance_m=None,
-            target_value=120.0,
-            priority="A",
-            primary_sport="bike",
-        )
-    )
-    store.save_events(slug, events)
-
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    result_cyclocross = handlers["draft_macro_plan"](
-        {
-            "event_name": "Cyclocross Regional Championship",
-            "current_weekly_volume_m": 200,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-    result_mtb = handlers["draft_macro_plan"](
-        {
-            "event_name": "December MTB Enduro",
-            "current_weekly_volume_m": 200,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert result_cyclocross["shape"] == result_mtb["shape"] == "hold_sharpen_taper"
-    assert (
-        result_cyclocross["established_base_evidence"]["established"]
-        == result_mtb["established_base_evidence"]["established"]
-        is True
-    )
-    assert (
-        result_cyclocross["established_base_evidence"]["weeks_with_load"]
-        == result_mtb["established_base_evidence"]["weeks_with_load"]
-    )
-    assert [b["name"] for b in result_cyclocross["blocks"]] == [
-        b["name"] for b in result_mtb["blocks"]
-    ]
-
-
-# --- replace_macro_plan ----------------------------------------------------------
-
-
-def test_replace_macro_plan_draft_mode_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-
-    result = handlers["replace_macro_plan"](
-        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is False
-    assert len(result["blocks"]) == 4
-    assert [b["name"] for b in result["blocks"]] == ["base", "build", "peak", "taper"]
-
-    # Untouched -- draft mode never calls save_macro.
-    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded == original_macro
-
-
-def test_replace_macro_plan_draft_mode_confirm_explicitly_false_also_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-
-    result = handlers["replace_macro_plan"](
-        {
-            "event_name": GREECE_EVENT_NAME,
-            "current_weekly_volume_m": 18000,
-            "start_date": "2026-01-05",
-            "confirm": False,
-        }
-    )
-
-    assert result["persisted"] is False
-    assert FileStore(base_dir=athletes_dir).load_macro("renee") == original_macro
-
-
-def test_replace_macro_plan_draft_includes_comparison_against_current_macro(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["replace_macro_plan"](
-        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
-    )
-
-    assert "error" not in result
-    comparison = result["comparison"]
-    assert comparison is not None
-    assert comparison["old_event_name"] == GREECE_EVENT_NAME
-    assert comparison["new_event_name"] == GREECE_EVENT_NAME
-    assert comparison["old_peak_weekly_volume_m"] == 26659  # athletes/renee/plan/macro.yaml
-    new_peak = next(b["weekly_volume_target_m"] for b in result["blocks"] if b["name"] == "peak")
-    assert comparison["new_peak_weekly_volume_m"] == new_peak
-
-
-def test_replace_macro_plan_confirm_true_persists_and_is_retrievable(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-
-    result = handlers["replace_macro_plan"](
-        {
-            "event_name": GREECE_EVENT_NAME,
-            "current_weekly_volume_m": 18000,
-            "start_date": "2026-01-05",
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-
-    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded is not None
-    assert reloaded.id != original_macro.id
-    assert [b.weekly_volume_target_m for b in reloaded.blocks] == [
-        b["weekly_volume_target_m"] for b in result["blocks"]
-    ]
-
-
-def test_replace_macro_plan_works_with_no_prior_macro(athletes_dir) -> None:
-    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    assert FileStore(base_dir=athletes_dir).load_macro("renee") is None
-
-    draft = handlers["replace_macro_plan"](
-        {"event_name": GREECE_EVENT_NAME, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
-    )
-    assert "error" not in draft
-    assert draft["persisted"] is False
-    assert draft["comparison"] is None  # nothing to compare against
-    assert FileStore(base_dir=athletes_dir).load_macro("renee") is None
-
-    confirmed = handlers["replace_macro_plan"](
-        {
-            "event_name": GREECE_EVENT_NAME,
-            "current_weekly_volume_m": 18000,
-            "start_date": "2026-01-05",
-            "confirm": True,
-        }
-    )
-    assert confirmed["persisted"] is True
-    reloaded = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded is not None
-    events = FileStore(base_dir=athletes_dir).load_events("renee")
-    greece = next(e for e in events if e.name == GREECE_EVENT_NAME)
-    assert reloaded.event_id == greece.id
-
-
-def test_replace_macro_plan_fixes_a_broken_zero_volume_macro_end_to_end(athletes_dir, run_tag) -> None:
-    # End-to-end regression test for the reported bug + gap: before Part 1's
-    # fix, draft_macro_plan with current_weekly_volume_m=0 silently persisted
-    # an all-zero macro, and there was previously no way to fix it afterward
-    # (draft_macro_plan refuses once any macro exists). Since scaffold_macro
-    # itself can no longer produce that degenerate macro (that's the Part 1
-    # fix working), this test constructs a broken all-zero macro directly --
-    # standing in for one created by the pre-fix engine, e.g. Andrew's own
-    # already-broken Halloween Spook Swim macro -- and confirms
-    # replace_macro_plan is the self-service fix.
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    name = f"Test Broken Macro Event [{run_tag}]"
-    create_result = handlers["create_event"](
-        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
-    )
-    event_id = uuid.UUID(create_result["id"])
-    athlete_id = store.load_athlete("renee").id
-
-    broken_macro = MacroPlan(
-        id=uuid.uuid4(),
-        athlete_id=athlete_id,
-        event_id=event_id,
-        blocks=[
-            MacroBlock(
-                name="base", start_date=date(2027, 1, 4), end_date=date(2027, 3, 1),
-                weekly_volume_target_m=0, focus="aerobic base",
-            ),
-            MacroBlock(
-                name="build", start_date=date(2027, 3, 2), end_date=date(2027, 3, 29),
-                weekly_volume_target_m=0, focus="race-specific build",
-            ),
-            MacroBlock(
-                name="peak", start_date=date(2027, 3, 30), end_date=date(2027, 4, 19),
-                weekly_volume_target_m=0, focus="peak volume",
-            ),
-            MacroBlock(
-                name="taper", start_date=date(2027, 4, 20), end_date=date(2027, 5, 31),
-                weekly_volume_target_m=0, focus="taper",
-            ),
-        ],
-    )
-    store.save_macro("renee", broken_macro)
-    assert all(b.weekly_volume_target_m == 0 for b in broken_macro.blocks)  # confirmed broken
-
-    # draft_macro_plan can't touch it -- confirm the refusal points here.
-    refused = handlers["draft_macro_plan"](
-        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01"}
-    )
-    assert "error" in refused
-    assert "replace_macro_plan" in refused["error"]
-
-    # replace_macro_plan is the fix: draft first...
-    draft = handlers["replace_macro_plan"](
-        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01"}
-    )
-    assert "error" not in draft
-    assert draft["persisted"] is False
-    assert any(b["weekly_volume_target_m"] > 0 for b in draft["blocks"])
-    # Still broken on disk -- draft mode didn't touch it.
-    assert FileStore(base_dir=athletes_dir).load_macro("renee").blocks == broken_macro.blocks
-
-    # ...then confirm.
-    fixed = handlers["replace_macro_plan"](
-        {"event_name": name, "current_weekly_volume_m": 12000, "start_date": "2027-01-01", "confirm": True}
-    )
-    assert fixed["persisted"] is True
-    fixed_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert fixed_macro is not None
-    assert any(b.weekly_volume_target_m > 0 for b in fixed_macro.blocks)
-    assert fixed_macro.event_id == event_id
-
-
-def test_replace_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["replace_macro_plan"](
-        {"event_name": "No Such Event At All", "current_weekly_volume_m": 15000}
-    )
-
-    assert "error" in result
-    assert GREECE_EVENT_NAME in result["error"]
-
-
-def test_replace_macro_plan_insufficient_runway_is_an_error(athletes_dir, run_tag) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    name = f"Test Sprint Event Replace [{run_tag}]"
-    handlers["create_event"](
-        {"name": name, "event_date": "2027-01-15", "distance_m": 5000, "priority": "B"}
-    )
-
-    result = handlers["replace_macro_plan"](
-        {"event_name": name, "current_weekly_volume_m": 10000, "start_date": "2027-01-01"}
-    )
-
-    assert "error" in result
-
-
-def test_replace_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_macro_plan"]({"event_name": GREECE_EVENT_NAME})
-    assert "error" in result
-
-
-def test_replace_macro_plan_missing_event_name_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_macro_plan"]({"current_weekly_volume_m": 15000})
-    assert "error" in result
-
-
-# --- draft_season_macro_plan (multi-race-season-macro build) -----------------------
-#
-# Uses `athletes/andrew` (see `_log_consistent_bike_history`/`_clear_workouts`
-# above), same as the sharpening-macro three-way-shape tests -- a bike-scoped
-# sandbox athlete this suite can build its own deterministic training-load
-# fixture on top of, rather than depending on renee's own real history.
-
-
-def _add_bike_event(
-    store: FileStore, slug: str, athlete_id, *, name: str, event_date: date, priority: str
-) -> Event:
-    events = store.load_events(slug)
-    event = Event(
-        id=uuid.uuid4(),
-        athlete_id=athlete_id,
-        name=name,
-        event_date=event_date,
-        target_metric="duration_min",
-        distance_m=None,
-        target_value=90.0,
-        priority=priority,
-        primary_sport="bike",
-    )
-    events.append(event)
-    store.save_events(slug, events)
-    return event
-
-
-def test_draft_season_macro_plan_requires_at_least_two_events(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {"event_names": ["Only One"], "current_weekly_volume_m": 300}
-    )
-    assert "error" in result
-    assert "at least 2 races" in result["error"]
-
-
-def test_draft_season_macro_plan_unknown_event_name_names_existing_events(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    athlete = store.load_athlete("andrew")
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Real Race", event_date=date(2026, 12, 1), priority="A"
-    )
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {"event_names": ["Real Race", "No Such Event"], "current_weekly_volume_m": 300}
-    )
-    assert "error" in result
-    assert "No Such Event" in result["error"]
-    assert "Real Race" in result["error"]  # known event names listed
-
-
-def test_draft_season_macro_plan_refuses_non_bike_events(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    athlete = store.load_athlete("andrew")
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Bike Race", event_date=date(2026, 12, 1), priority="A"
-    )
-    events = store.load_events("andrew")
-    events.append(
-        Event(
-            id=uuid.uuid4(), athlete_id=athlete.id, name="Swim Race",
-            event_date=date(2026, 11, 1), distance_m=3000, priority="B",
-        )
-    )
-    store.save_events("andrew", events)
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {"event_names": ["Bike Race", "Swim Race"], "current_weekly_volume_m": 300}
-    )
-    assert "error" in result
-    assert "primary_sport='bike'" in result["error"]
-    assert "Swim Race" in result["error"]
-
-
-def test_draft_season_macro_plan_refuses_past_races(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    athlete = store.load_athlete("andrew")
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Past Race", event_date=date(2026, 1, 1), priority="B"
-    )
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Future Race", event_date=date(2026, 12, 1), priority="A"
-    )
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Past Race", "Future Race"],
-            "current_weekly_volume_m": 300,
-            "start_date": "2026-06-01",
-        }
-    )
-    assert "error" in result
-    assert "Past Race" in result["error"]
-
-
-def test_draft_season_macro_plan_draft_mode_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    _add_bike_event(
-        store, slug, athlete.id, name="Race A",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
-    )
-    _add_bike_event(
-        store, slug, athlete.id, name="Race B",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
-    )
-    original_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Race A", "Race B"],
-            "current_weekly_volume_m": 300,
-            "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is False
-    assert len(result["blocks"]) > 0
-    assert FileStore(base_dir=athletes_dir).load_macro(slug) == original_macro
-
-
-def test_draft_season_macro_plan_confirm_true_persists_and_is_retrievable(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    race_a = _add_bike_event(
-        store, slug, athlete.id, name="Race A2",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
-    )
-    race_b = _add_bike_event(
-        store, slug, athlete.id, name="Race B2",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Race A2", "Race B2"],
-            "current_weekly_volume_m": 300,
-            "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-
-    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert reloaded is not None
-    assert reloaded.event_ids == [race_a.id, race_b.id]
-    assert reloaded.event_id == race_b.id  # the final, chronologically-last race
-
-
-def test_draft_season_macro_plan_coverage_flags_lost_race_from_existing_macro(athletes_dir) -> None:
-    # The literal, real fix: athletes/andrew's own shipped fixture macro
-    # targets "Andrew Test Goal 10K" (a DIFFERENT, pre-existing event).
-    # Drafting this new season macro must surface that persisting it would
-    # stop covering that race -- never a silent overwrite.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    existing_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert existing_macro is not None  # shipped fixture precondition
-    existing_events = store.load_events(slug)
-    orphaned_event = next(e for e in existing_events if e.id == existing_macro.event_id)
-
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    _add_bike_event(
-        store, slug, athlete.id, name="New Race A",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
-    )
-    _add_bike_event(
-        store, slug, athlete.id, name="New Race B",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["New Race A", "New Race B"],
-            "current_weekly_volume_m": 300,
-            "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-
-    assert "error" not in result
-    coverage = result["coverage"]
-    assert coverage is not None
-    assert orphaned_event.name in coverage["old_race_names"]
-    assert orphaned_event.name in coverage["would_lose_coverage_for"]
-    # Draft mode: nothing persisted yet, the real macro is still untouched.
-    assert FileStore(base_dir=athletes_dir).load_macro(slug) == existing_macro
-
-
-def test_draft_season_macro_plan_coverage_is_none_when_new_season_re_covers_same_races(
-    athletes_dir,
-) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    _add_bike_event(
-        store, slug, athlete.id, name="Repeat Race A",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A",
-    )
-    _add_bike_event(
-        store, slug, athlete.id, name="Repeat Race B",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    first = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Repeat Race A", "Repeat Race B"],
-            "current_weekly_volume_m": 300,
-            "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-            "confirm": True,
-        }
-    )
-    assert first["persisted"] is True
-
-    second = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Repeat Race A", "Repeat Race B"],
-            "current_weekly_volume_m": 300,
-            "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-    assert "error" not in second
-    assert second["coverage"]["would_lose_coverage_for"] == []
-
-
-def test_draft_season_macro_plan_real_andrew_cx_calendar_end_to_end(athletes_dir) -> None:
-    # Real, DB-verified scenario this build was written against: Andrew's
-    # actual 2026 cyclocross season -- Season Opener (B, 5 days out from
-    # "today"), Peak Weekend (A), Halloween Weekend (B), Season Finale (B).
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-
-    season_opener = _add_bike_event(
-        store, slug, athlete.id, name="Season Opener",
-        event_date=_SHARPENING_AS_OF + timedelta(days=5), priority="B",
-    )
-    peak_weekend = _add_bike_event(
-        store, slug, athlete.id, name="Peak Weekend",
-        event_date=_SHARPENING_AS_OF + timedelta(days=33), priority="A",
-    )
-    halloween_weekend = _add_bike_event(
-        store, slug, athlete.id, name="Halloween Weekend",
-        event_date=_SHARPENING_AS_OF + timedelta(days=47), priority="B",
-    )
-    season_finale = _add_bike_event(
-        store, slug, athlete.id, name="Season Finale",
-        event_date=_SHARPENING_AS_OF + timedelta(days=68), priority="B",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": [
-                "Season Opener", "Peak Weekend", "Halloween Weekend", "Season Finale",
-            ],
-            "current_weekly_volume_m": 540,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-    assert result["established_base_evidence"]["established"] is True
-
-    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
-    assert got_dedicated["Peak Weekend"] is True
-    assert got_dedicated["Season Finale"] is True
-    assert got_dedicated["Season Opener"] is False
-    assert got_dedicated["Halloween Weekend"] is False
-
-    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert reloaded is not None
-    assert reloaded.event_ids == [
-        season_opener.id, peak_weekend.id, halloween_weekend.id, season_finale.id,
-    ]
-    # Contiguous, EXCEPT for a deliberate 7-day gap after a dedicated
-    # cycle's own protected race week (2026-09-15 bug fix -- see
-    # scaffold_season_macro's own docstring): a race that got a dedicated
-    # cycle (Peak Weekend, Season Finale here) leaves its own race week
-    # unmodeled, same "race week itself is not a block" convention a
-    # single-race macro already has -- now correctly preserved when
-    # chained, instead of being silently claimed as the next race's
-    # build-up.
-    dedicated_ids = {peak_weekend.id, season_finale.id}
-    for prev, curr in zip(reloaded.blocks, reloaded.blocks[1:]):
-        gap_days = (curr.start_date - prev.end_date).days
-        if prev.race_event_id in dedicated_ids and prev.race_event_id != curr.race_event_id:
-            assert gap_days == 8, (
-                f"expected a 7-day protected-race-week gap after "
-                f"{prev.race_event_id}'s own dedicated cycle, got {gap_days - 1} days"
-            )
-        else:
-            assert gap_days == 1, f"unexpected gap between {prev.name} and {curr.name}"
-
-
-# --- IDEA 018: extend-an-active-plan mode, through the REAL tool handler ------------
-#
-# `test_scaffold_season_macro_*` in tests/unit/test_plan.py already pins the
-# engine function's own behavior directly. These exercise the actual real
-# failure path end-to-end: `_handle_draft_season_macro_plan` itself now
-# loads `existing_macro` BEFORE calling `scaffold_season_macro` and threads
-# it through, and surfaces the new `warnings` list in its result dict -- both
-# real handler-level changes with no coverage until these tests.
-
-
-def test_draft_season_macro_plan_extends_existing_legacy_macro_end_to_end(athletes_dir) -> None:
-    # The exact real repro (IDEA 018), driven through the actual tool the
-    # coach calls: Peak Weekend already has a real, persisted legacy
-    # single-race (sharpen/taper) macro from an earlier draft_macro_plan
-    # call. Re-running draft_season_macro_plan a few days later to add two
-    # more races must EXTEND that macro -- reuse Peak Weekend's real
-    # coverage byte-for-byte -- instead of re-deriving it and hard-refusing
-    # on its now-stale runway.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    peak_weekend = _add_bike_event(
-        store, slug, athlete.id, name="Peak Weekend",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=5), priority="A",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    # Build the real, currently-persisted legacy single-race macro first --
-    # same tool (draft_macro_plan, unchanged, out of scope for this build)
-    # Andrew's real season macro was originally built with.
-    legacy_result = handlers["draft_macro_plan"](
-        {
-            "event_name": "Peak Weekend",
-            "current_weekly_volume_m": 300,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-    assert "error" not in legacy_result
-    assert legacy_result["shape"] == "hold_sharpen_taper"  # the real 2-block sharpen/taper shape
-    legacy_macro = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert legacy_macro is not None
-    assert legacy_macro.event_id == peak_weekend.id
-    assert all(b.race_event_id is None for b in legacy_macro.blocks)
-    original_snapshot = [
-        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in legacy_macro.blocks
-    ]
-
-    halloween_weekend = _add_bike_event(
-        store, slug, athlete.id, name="Halloween Weekend",
-        event_date=peak_weekend.event_date + timedelta(weeks=2), priority="B",
-    )
-    season_finale = _add_bike_event(
-        store, slug, athlete.id, name="Season Finale",
-        event_date=peak_weekend.event_date + timedelta(weeks=5), priority="B",
-    )
-
-    # "A few days later": from this later start, Peak Weekend's own runway
-    # has shrunk below SHARPENING_MIN_MACRO_WEEKS -- exactly the real
-    # logged failure. Calling draft_season_macro_plan directly with
-    # confirm=True (as the coordinator's repro does) must now succeed.
-    new_start = _SHARPENING_AS_OF + timedelta(days=9)
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Peak Weekend", "Halloween Weekend", "Season Finale"],
-            "current_weekly_volume_m": 300,
-            "start_date": new_start.isoformat(),
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-    # No degrade needed here -- race 1 is fully reused, not folded in --
-    # so the warnings list is present but empty, never silently omitted.
-    assert result["warnings"] == []
-
-    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
-    assert got_dedicated["Peak Weekend"] is True
-
-    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert reloaded is not None
-    assert reloaded.event_ids == [peak_weekend.id, halloween_weekend.id, season_finale.id]
-    peak_blocks = [b for b in reloaded.blocks if b.race_event_id == peak_weekend.id]
-    assert len(peak_blocks) == 2
-    reused_snapshot = [
-        (b.name, b.start_date, b.end_date, b.weekly_volume_target_m) for b in peak_blocks
-    ]
-    assert reused_snapshot == original_snapshot  # byte-for-byte preserved
-    assert any(b.race_event_id == season_finale.id for b in reloaded.blocks)
-
-
-def test_draft_season_macro_plan_surfaces_extend_mode_degrade_warning(athletes_dir) -> None:
-    # IDEA 018 item 2, through the real handler: extending an active plan
-    # with established_base=True degrades a too-short A-tier runway further
-    # down the chain to a warning instead of aborting the whole call -- and
-    # that warning is actually present in the tool's own result dict, never
-    # silently dropped.
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    peak_weekend = _add_bike_event(
-        store, slug, athlete.id, name="Peak Weekend",
-        event_date=_SHARPENING_AS_OF + timedelta(weeks=5), priority="A",
-    )
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-
-    legacy_result = handlers["draft_macro_plan"](
-        {
-            "event_name": "Peak Weekend",
-            "current_weekly_volume_m": 300,
-            "start_date": _SHARPENING_AS_OF.isoformat(),
-        }
-    )
-    assert "error" not in legacy_result
-
-    peak_monday = _monday_of_week(peak_weekend.event_date)
-    cursor_start = peak_monday + timedelta(weeks=1)
-    # Only 2 weeks of runway for this second race -- below
-    # SHARPENING_MIN_MACRO_WEEKS (4).
-    tight_a = _add_bike_event(
-        store, slug, athlete.id, name="Tight A",
-        event_date=cursor_start + timedelta(weeks=2), priority="A",
-    )
-
-    new_start = _SHARPENING_AS_OF + timedelta(days=9)
-    result = handlers["draft_season_macro_plan"](
-        {
-            "event_names": ["Peak Weekend", "Tight A"],
-            "current_weekly_volume_m": 300,
-            "start_date": new_start.isoformat(),
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-    assert len(result["warnings"]) == 1
-    assert "Tight A" in result["warnings"][0]
-    got_dedicated = {r["event_name"]: r["got_dedicated_cycle"] for r in result["race_summary"]}
-    assert got_dedicated["Peak Weekend"] is True
-    # "Tight A" got no dedicated (sharpen/taper) cycle -- it's the LAST race
-    # in this chain though, so it still gets the ordinary trailing "hold"
-    # filler tagged with its own id (same pre-existing, unrelated mechanism
-    # tests/unit/test_plan.py's own
-    # test_scaffold_season_macro_trailing_block_added_when_final_race_has_
-    # no_dedicated_cycle pins) -- distinguish "got a real dedicated shape"
-    # from "just the automatic trailing filler" by block name, not presence.
-    reloaded = FileStore(base_dir=athletes_dir).load_macro(slug)
-    tight_a_blocks = [b for b in reloaded.blocks if b.race_event_id == tight_a.id]
-    assert len(tight_a_blocks) == 1
-    assert tight_a_blocks[0].name == "hold"
-
-
-def test_draft_season_macro_plan_missing_current_weekly_volume_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    athlete = store.load_athlete("andrew")
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Vol Test A", event_date=date(2026, 12, 1), priority="A"
-    )
-    _add_bike_event(
-        store, "andrew", athlete.id, name="Vol Test B", event_date=date(2026, 12, 15), priority="B"
-    )
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-    result = handlers["draft_season_macro_plan"](
-        {"event_names": ["Vol Test A", "Vol Test B"]}
-    )
-    assert "error" in result
-
-
-def test_draft_season_macro_plan_missing_event_names_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="andrew", expert_mode=False)
-    result = handlers["draft_season_macro_plan"]({"current_weekly_volume_m": 300})
-    assert "error" in result
+    event = next(e for e in store.load_events("renee") if e.name == name)
+    # A Monday after renee's existing week-plan fixture files (2026-W28/W29) so this macro's
+    # first week doesn't collide with an already-persisted week.
+    macro = scaffold_macro(
+        athlete, event, date(2026, 9, 7), current_weekly_volume_m=200, peak_weekly_volume_m=600
+    )
+    store.save_macro("renee", macro)
+
+    year, week, _ = macro.blocks[0].start_date.isocalendar()
+    return f"{year}-W{week:02d}", {"event": event}
+
+
+def _seed_generated_week(athletes_dir, iso_week: str = "2026-W28") -> dict:
+    """Persists the engine-regenerated week for `iso_week` as renee's week on file and returns it in
+    the tool-facing `{"sessions": [...]}` shape -- the baseline the patch-override tests edit."""
+    week = seed_generated_week(FileStore(base_dir=athletes_dir), "renee", iso_week)
+    return {"sessions": _week_sessions_json(week)}
 
 
 # --- compute_fueling_plan (engine/fueling-calculator) -----------------------
@@ -3813,7 +2545,7 @@ def test_compute_fueling_plan_confirm_true_without_existing_week_plan_is_rejecte
     )
 
     assert "error" in result
-    assert "create_week_plan" in result["error"]
+    assert "author_week_plan" in result["error"]
 
 
 def test_compute_fueling_plan_confirm_true_persists_pre_event_session(athletes_dir) -> None:
@@ -3912,88 +2644,6 @@ def test_set_pool_coach_status_non_boolean_is_an_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     result = handlers["set_pool_coach_status"]({"has_pool_coach": "yes"})
-    assert "error" in result
-
-
-# --- create_week_plan -----------------------------------------------------------
-
-
-def test_create_week_plan_persists_a_new_week_from_the_macro(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    # 2026-W30 falls inside the base block (2026-07-06 -> 2026-08-02) and has
-    # no existing week file (only W28/W29 exist in the test tree).
-    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
-
-    assert "error" not in result
-    assert result["created"] is True
-    assert result["iso_week"] == "2026-W30"
-    assert result["meso_block"] == "base"
-    assert result["target_volume_m"] > 0
-    assert len(result["sessions"]) > 0
-
-    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30")
-    assert reloaded is not None
-    assert reloaded.draft is False
-    assert reloaded.target_volume_m == result["target_volume_m"]
-
-
-def test_create_week_plan_refuses_when_week_already_exists(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["create_week_plan"]({"iso_week": "2026-W28"})
-
-    assert "error" in result
-    assert "propose_adaptation" in result["error"]
-
-
-def test_create_week_plan_no_macro_is_an_error(athletes_dir) -> None:
-    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
-
-    assert "error" in result
-    assert "draft_macro_plan" in result["error"]
-
-
-def test_create_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["create_week_plan"]({"iso_week": "not-a-week"})
-    assert "error" in result
-
-
-def test_create_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["create_week_plan"]({})
-    assert "error" in result
-
-
-def test_create_week_plan_missing_macro_event_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    events = store.load_events("renee")
-    remaining = [e for e in events if e.name != GREECE_EVENT_NAME]
-    store.save_events("renee", remaining)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["create_week_plan"]({"iso_week": "2026-W30"})
-
-    assert "error" in result
-    assert "not found in events.yaml" in result["error"]
-
-
-def test_create_week_plan_week_outside_macro_range_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    # Well past the macro's taper block (ends 2026-09-13).
-    result = handlers["create_week_plan"]({"iso_week": "2027-W01"})
-
     assert "error" in result
 
 
@@ -4213,210 +2863,30 @@ def test_reschedule_session_missing_required_field_is_an_error(
     assert "error" in result
 
 
-# --- replace_week_plan ---------------------------------------------------------
+# --- patch_week_plan session overrides -----------------------------------------
 # 2026-W28/W29 already have real week files in the test tree (base block,
-# 2026-07-06 .. 2026-08-02); 2026-W30 has none yet (same gap create_week_plan's
-# own tests use).
+# 2026-07-06 .. 2026-08-02); 2026-W30 has none yet (a week with no file).
 
 
-def test_replace_week_plan_draft_mode_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
-
-    assert "error" not in result
-    assert result["persisted"] is False
-    assert result["iso_week"] == "2026-W28"
-    assert result["target_volume_m"] > 0
-    assert len(result["sessions"]) > 0
-
-    # Untouched -- draft mode never calls save_week.
-    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-    assert reloaded == original_week
-
-
-def test_replace_week_plan_draft_mode_confirm_explicitly_false_also_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": False})
-
-    assert result["persisted"] is False
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28") == original_week
-
-
-def test_replace_week_plan_draft_includes_comparison_against_current_week(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
-
-    assert "error" not in result
-    comparison = result["comparison"]
-    assert comparison is not None
-    assert comparison["old_target_volume_m"] == original_week.target_volume_m
-    assert comparison["old_session_count"] == len(original_week.sessions)
-    assert comparison["new_target_volume_m"] == result["target_volume_m"]
-    assert comparison["new_session_count"] == len(result["sessions"])
-
-
-def test_replace_week_plan_flags_sessions_dropped_by_full_regeneration(athletes_dir) -> None:
-    # Real incident, 2026-09-12: an athlete asked the coach to update just
-    # ONE session's content via session_overrides on an already-persisted
-    # week; replace_week_plan's own docstring says it applies overrides to
-    # a FRESHLY-GENERATED week -- generate_week has no memory of manually
-    # `add`-ed sessions that aren't part of its own deterministic output, so
-    # they silently vanish from the result even though they're still
-    # sitting in the persisted "existing_week" the coach never re-reads.
-    # This nearly deleted a race day. `comparison`'s old/new *counts*
-    # existed already but can't catch a same-count swap -- this proves the
-    # tool now names exactly which persisted sessions wouldn't survive.
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    # Persist a baseline, then bolt on an out-of-band session generate_week
-    # itself would never produce (an "add"-mode session on a day its own
-    # rotation leaves open) -- this is the stand-in for the real incident's
-    # already-persisted MTB/strength/Day-2-race sessions that a fresh
-    # regeneration has no way to reconstruct.
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
-    assert "error" not in baseline
-    extra_date = "2026-07-06"  # that week's Monday, normally left open
-    added = handlers["replace_week_plan"]({
-        "iso_week": "2026-W28",
-        "confirm": True,
-        "session_overrides": [{
-            "date": extra_date, "add": True, "sport": "recovery",
-            "duration_min": 30, "purpose": "manually-added mobility session",
-        }],
-    })
-    assert "error" not in added
-    assert any(s["date"] == extra_date for s in added["sessions"])
-
-    # Now ask for an UNRELATED single-session edit -- a routine content
-    # tweak to a different day, same shape a real "just fix Monday" request
-    # takes.
-    other_session = next(s for s in added["sessions"] if s["date"] != extra_date)
-    result = handlers["replace_week_plan"]({
-        "iso_week": "2026-W28",
-        "session_overrides": [{
-            "date": other_session["date"], "sport": other_session["sport"],
-            "purpose": "unrelated content tweak",
-        }],
-    })
-    assert "error" not in result, result
-
-    # The manually-added session is gone from the regenerated output --
-    # exactly the silent-drop this guardrail must catch (generate_week's
-    # own fresh output may still place SOME session on that date -- e.g. a
-    # real pool day -- so the check is specifically for the vanished
-    # recovery-sport one, not "nothing at all on that date").
-    assert not any(s["date"] == extra_date and s["sport"] == "recovery" for s in result["sessions"])
-    dropped = result.get("dropped_sessions")
-    assert dropped, "expected dropped_sessions to name the vanished session"
-    assert any(d["date"] == extra_date and d["sport"] == "recovery" for d in dropped)
-    warnings = " ".join(result["planning_warnings"]).lower()
-    assert "dropped" in warnings or "would not carry forward" in warnings or "removed" in warnings
-
-
-def test_replace_week_plan_confirm_true_persists_and_overwrites_existing_week(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    original_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
-
-    assert "error" not in result
-    assert result["persisted"] is True
-
-    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-    assert reloaded is not None
-    # Overwritten -- a freshly generated week, not the original object on disk.
-    assert reloaded.id != original_week.id
-    assert reloaded.target_volume_m == result["target_volume_m"]
-    assert len(reloaded.sessions) == len(result["sessions"])
-
-
-def test_replace_week_plan_works_when_no_week_exists_yet(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
-
-    draft = handlers["replace_week_plan"]({"iso_week": "2026-W30"})
-    assert "error" not in draft
-    assert draft["persisted"] is False
-    assert draft["comparison"] is None  # nothing to compare against
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is None
-
-    confirmed = handlers["replace_week_plan"]({"iso_week": "2026-W30", "confirm": True})
-    assert confirmed["persisted"] is True
-    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30")
-    assert reloaded is not None
-    assert reloaded.iso_week == "2026-W30"
-
-
-def test_replace_week_plan_week_outside_macro_range_is_a_clean_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    # Well past the macro's taper block (ends 2026-09-13) -- must return a
-    # calm {"error": ...}, never raise.
-    result = handlers["replace_week_plan"]({"iso_week": "2027-W01"})
-
-    assert "error" in result
-    # Nothing persisted for a week that was never on file.
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2027-W01") is None
-
-
-def test_replace_week_plan_no_macro_is_an_error(athletes_dir) -> None:
-    (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
-
-    assert "error" in result
-    assert "draft_macro_plan" in result["error"]
-
-
-def test_replace_week_plan_invalid_iso_week_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_week_plan"]({"iso_week": "not-a-week"})
-    assert "error" in result
-
-
-def test_replace_week_plan_missing_iso_week_is_an_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_week_plan"]({})
-    assert "error" in result
-
-
-# --- replace_week_plan session_overrides ----------------------------------------
+# --- patch_week_plan session_overrides ----------------------------------------
 # Real bug, real athlete: a first-swim-back-after-a-break session computed a
 # technically ramp-safe but unwanted distance, and there was no tool that could
-# just set a specific session's number -- create_week_plan refuses (week
-# exists), propose_adaptation refuses (no prior week), and replace_week_plan on
+# just set a specific session's number -- propose_adaptation refuses (no prior week), and a regeneration on
 # its own just recomputes the identical deterministic number again. This is the
 # fix: an explicit override applied on top of the otherwise-normal draft.
 
 
-def test_replace_week_plan_session_override_sets_distance_and_reestimates_duration(athletes_dir) -> None:
+def test_patch_week_plan_session_override_sets_distance_and_reestimates_duration(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     assert "error" not in baseline
     target = baseline["sessions"][0]
     original_duration = target["duration_min"]
     new_distance = (target["distance_m"] or 1000) / 2  # deliberately different from computed
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": target["date"], "sport": target["sport"], "distance_m": new_distance}],
     })
@@ -4433,13 +2903,13 @@ def test_replace_week_plan_session_override_sets_distance_and_reestimates_durati
     assert others_before == others_after
 
 
-def test_replace_week_plan_session_override_explicit_duration_is_not_reestimated(athletes_dir) -> None:
+def test_patch_week_plan_session_override_explicit_duration_is_not_reestimated(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"], "distance_m": 500, "duration_min": 12.5,
@@ -4452,19 +2922,19 @@ def test_replace_week_plan_session_override_explicit_duration_is_not_reestimated
     assert overridden["duration_min"] == 12.5
 
 
-def test_replace_week_plan_session_override_persists_only_on_confirm(athletes_dir) -> None:
+def test_patch_week_plan_session_override_persists_only_on_confirm(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
     override = [{"date": target["date"], "sport": target["sport"], "distance_m": 750}]
 
-    draft = handlers["replace_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
+    draft = handlers["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
     assert draft["persisted"] is False
     on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
     assert not any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
 
-    confirmed = handlers["replace_week_plan"]({
+    confirmed = handlers["patch_week_plan"]({
         "iso_week": "2026-W28", "session_overrides": override, "confirm": True,
     })
     assert confirmed["persisted"] is True
@@ -4472,11 +2942,11 @@ def test_replace_week_plan_session_override_persists_only_on_confirm(athletes_di
     assert any(s.date.isoformat() == target["date"] and s.distance_m == 750 for s in on_disk.sessions)
 
 
-def test_replace_week_plan_session_override_no_matching_session_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_no_matching_session_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": "2099-01-01", "distance_m": 1000}],
     })
@@ -4485,17 +2955,17 @@ def test_replace_week_plan_session_override_no_matching_session_is_a_clean_error
     assert "2099-01-01" in result["error"]
 
 
-def test_replace_week_plan_session_override_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
 
     date_counts = Counter(s["date"] for s in baseline["sessions"])
     multi_session_date = next((d for d, count in date_counts.items() if count > 1), None)
     if multi_session_date is None:
         pytest.skip("this fixture week has no day with more than one session to test ambiguity against")
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": multi_session_date, "distance_m": 1000}],
     })
@@ -4504,13 +2974,13 @@ def test_replace_week_plan_session_override_ambiguous_date_without_sport_is_a_cl
     assert "disambiguate" in result["error"]
 
 
-def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_missing_both_fields_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": target["date"], "sport": target["sport"]}],
     })
@@ -4518,7 +2988,7 @@ def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error
     assert "error" in result
 
 
-# --- replace_week_plan session_overrides: purpose/structure content authoring ---
+# --- patch_week_plan session_overrides: purpose/structure content authoring ---
 # Real bug, real athlete, real transcript: asked the coach for a technique
 # session and Tuesday/Thursday variety on a base-block week. No base-block
 # template has purpose=technique and none is an interval format either, so
@@ -4528,10 +2998,10 @@ def test_replace_week_plan_session_override_missing_both_fields_is_a_clean_error
 # session_overrides instead of only describing it in a chat reply.
 
 
-def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_dir) -> None:
+def test_patch_week_plan_session_override_sets_purpose_and_structure(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
     new_purpose = "Technique -- freestyle catch and rotation drills"
@@ -4540,7 +3010,7 @@ def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_
         "Main set: 4 x 50m catch-up drill, 15s rest; 4 x 50m single-arm, 15s rest.\n"
         "Cool-down: 300m easy, focus on stroke count."
     )
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4555,7 +3025,7 @@ def test_replace_week_plan_session_override_sets_purpose_and_structure(athletes_
     assert overridden["distance_m"] == 1000
 
 
-def test_replace_week_plan_session_override_structure_without_distance_m_is_flagged_not_blocked(athletes_dir) -> None:
+def test_patch_week_plan_session_override_structure_without_distance_m_is_flagged_not_blocked(athletes_dir) -> None:
     # Real bug, caught live: a coach-authored structure ("600m warm-up +
     # 10x200m + 400m cool-down = 3000m") persisted fine, but distance_m was
     # never updated to match -- the athlete saw a distance stat (400m, left
@@ -4567,10 +3037,10 @@ def test_replace_week_plan_session_override_structure_without_distance_m_is_flag
     # a loud planning warning says the stat may not match.
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4586,14 +3056,14 @@ def _draft_then_confirm(handlers, payload):
     """The agreed-plan protocol (Andrew, 2026-09-21): draft the exact payload, then confirm
     THAT draft by its draft_id -- confirm writes the draft, it never recomputes. Returns the
     draft's own result when it errors (so error-path tests still see the error)."""
-    draft = handlers["replace_week_plan"]({k: v for k, v in payload.items() if k != "confirm"})
+    draft = handlers["patch_week_plan"]({k: v for k, v in payload.items() if k != "confirm"})
     if "error" in draft or not draft.get("draft_id"):
         return draft
-    return handlers["replace_week_plan"]({"iso_week": payload["iso_week"], "confirm": True, "draft_id": draft["draft_id"]})
+    return handlers["patch_week_plan"]({"iso_week": payload["iso_week"], "confirm": True, "draft_id": draft["draft_id"]})
 
 
 
-def test_replace_week_plan_session_override_structure_clears_stale_structured_ir(athletes_dir) -> None:
+def test_patch_week_plan_session_override_structure_clears_stale_structured_ir(athletes_dir) -> None:
     # The session whose structure we're overriding may already have real
     # structured data (Garmin-exportable, tree-walk-rendered) from the
     # template pipeline -- if we didn't clear it, the UI and Garmin export
@@ -4601,7 +3071,7 @@ def test_replace_week_plan_session_override_structure_clears_stale_structured_ir
     # new prose just persisted here.
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next((s for s in baseline["sessions"] if s["has_structured"]), None)
     if target is None:
         pytest.skip("no session in this fixture week has structured data to test clearing against")
@@ -4626,13 +3096,13 @@ def test_replace_week_plan_session_override_structure_clears_stale_structured_ir
     assert "hand-authored replacement" in persisted.structure
 
 
-def test_replace_week_plan_session_override_purpose_only_leaves_structure_untouched(athletes_dir) -> None:
+def test_patch_week_plan_session_override_purpose_only_leaves_structure_untouched(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": target["date"], "sport": target["sport"], "purpose": "Recovery swim"}],
     })
@@ -4644,7 +3114,7 @@ def test_replace_week_plan_session_override_purpose_only_leaves_structure_untouc
     assert overridden["has_structured"] == target["has_structured"]
 
 
-# --- replace_week_plan session_overrides: structured (machine-readable IR) ---
+# --- patch_week_plan session_overrides: structured (machine-readable IR) ---
 # Follow-up to purpose/structure content authoring: `structure` (prose) alone
 # unconditionally nulls `session.structured`, which silently makes any
 # coach-authored session un-exportable to a Garmin watch (the upcoming
@@ -4711,10 +3181,10 @@ _STRUCTURED_STRENGTH_PAYLOAD = {
 }
 
 
-def test_replace_week_plan_session_override_structured_persists_real_ir(athletes_dir) -> None:
+def test_patch_week_plan_session_override_structured_persists_real_ir(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
     result = _draft_then_confirm(handlers, {
@@ -4738,13 +3208,13 @@ def test_replace_week_plan_session_override_structured_persists_real_ir(athletes
     assert persisted.structured.items[1].steps[0].label == "50m catch-up drill"
 
 
-def test_replace_week_plan_session_override_invalid_structured_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_invalid_structured_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4777,14 +3247,14 @@ def test_replace_week_plan_session_override_invalid_structured_is_a_clean_error(
     assert persisted.structure == target["structure"]
 
 
-def test_replace_week_plan_session_override_structure_and_structured_both_persist(athletes_dir) -> None:
+def test_patch_week_plan_session_override_structure_and_structured_both_persist(athletes_dir) -> None:
     # This is the case the whole change exists for: coach supplies BOTH the
     # athlete-facing prose (`structure`) and the machine-readable IR
     # (`structured`) describing the same session -- neither should clobber
     # the other.
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
     new_structure = (
@@ -4816,7 +3286,7 @@ def test_replace_week_plan_session_override_structure_and_structured_both_persis
     assert persisted.structured.items[0].label == "Warm-up"
 
 
-def test_replace_week_plan_session_override_structured_alone_no_distance_required(athletes_dir) -> None:
+def test_patch_week_plan_session_override_structured_alone_no_distance_required(athletes_dir) -> None:
     # `structured`-only overrides must NOT be forced through the
     # `structure`-requires-`distance_m` guard -- a strength session's
     # structured tree is machine-summable (or has no distance at all), so
@@ -4825,7 +3295,7 @@ def test_replace_week_plan_session_override_structured_alone_no_distance_require
     # exercise-list entry for it.
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     strength_target = next((s for s in baseline["sessions"] if s["sport"] == "strength"), baseline["sessions"][0])
 
     result = _draft_then_confirm(handlers, {
@@ -4856,7 +3326,7 @@ def test_replace_week_plan_session_override_structured_alone_no_distance_require
     assert repeat_node.steps[0].label == "Kettlebell swings"
 
 
-# --- replace_week_plan session_overrides: ow_template (open-water template library) ---
+# --- patch_week_plan session_overrides: ow_template (open-water template library) ---
 # The open-water session-content template library
 # (engine/swim_coach/ow_session_templates.py, library/
 # 18-open-water-session-templates.md) is wired into session_overrides via
@@ -4864,10 +3334,10 @@ def test_replace_week_plan_session_override_structured_alone_no_distance_require
 # of hand-authoring `structure`/`structured` from scratch.
 
 
-def test_replace_week_plan_session_override_ow_template_persists_resolved_content(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_persists_resolved_content(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
     result = _draft_then_confirm(handlers, {
@@ -4898,13 +3368,13 @@ def test_replace_week_plan_session_override_ow_template_persists_resolved_conten
         assert step.target.low is not None
 
 
-def test_replace_week_plan_session_override_ow_template_defaults_distance_from_session(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_defaults_distance_from_session(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -4920,13 +3390,13 @@ def test_replace_week_plan_session_override_ow_template_defaults_distance_from_s
     assert overridden["distance_m"] == target["distance_m"]
 
 
-def test_replace_week_plan_session_override_ow_template_missing_id_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_missing_id_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": target["date"], "sport": target["sport"], "ow_template": {}}],
     })
@@ -4935,10 +3405,10 @@ def test_replace_week_plan_session_override_ow_template_missing_id_is_a_clean_er
     assert "ow_template" in result["error"]
 
 
-def test_replace_week_plan_session_override_ow_template_unknown_id_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_unknown_id_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     # session[0] (not a sport-filtered pick): the real committed 2026-W28.yaml
     # was hand-edited away from generate_week's default Saturday long-swim
     # placement (see notes/decisions.md's 2026-07-05 "W28 rewritten" entry),
@@ -4965,10 +3435,10 @@ def test_replace_week_plan_session_override_ow_template_unknown_id_is_a_clean_er
     assert persisted.structured is None
 
 
-def test_replace_week_plan_session_override_ow_template_below_floor_is_a_clean_error(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_below_floor_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
     result = _draft_then_confirm(handlers, {
@@ -4984,13 +3454,13 @@ def test_replace_week_plan_session_override_ow_template_below_floor_is_a_clean_e
     assert "feed-window practice" in result["error"]
 
 
-def test_replace_week_plan_session_override_ow_template_combined_with_structure_degrades_to_the_text(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_combined_with_structure_degrades_to_the_text(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -5007,20 +3477,20 @@ def test_replace_week_plan_session_override_ow_template_combined_with_structure_
     assert saved["has_structured"] is False
 
 
-def test_replace_week_plan_session_override_ow_template_day2_framing_differs_from_day1(athletes_dir) -> None:
+def test_patch_week_plan_session_override_ow_template_day2_framing_differs_from_day1(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = next(s for s in baseline["sessions"] if s["sport"] == "swim_ow")
 
-    day1 = handlers["replace_week_plan"]({
+    day1 = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
             "ow_template": {"id": "back_to_back_stage_day1", "distance_m": 6000},
         }],
     })
-    day2 = handlers["replace_week_plan"]({
+    day2 = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"],
@@ -5035,53 +3505,7 @@ def test_replace_week_plan_session_override_ow_template_day2_framing_differs_fro
     assert "fatigue" in structure2.lower()
 
 
-def test_week_sessions_json_exposes_structure_and_has_structured(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
-
-    assert "error" not in result
-    for session in result["sessions"]:
-        assert "structure" in session
-        assert "has_structured" in session
-        assert isinstance(session["has_structured"], bool)
-
-
-def test_replace_week_plan_end_to_end_pool_coach_status_change_regression(athletes_dir) -> None:
-    # This morning's real bug, end to end: 2026-W28's real fixture sessions
-    # are pool_coach-source placeholders (has_pool_coach defaults True).
-    # After the athlete says they no longer have a pool coach
-    # (set_pool_coach_status(False)), 2026-W28 is stuck with stale
-    # pool_coach placeholder content and no tool could regenerate it --
-    # create_week_plan refuses (week exists), propose_adaptation refuses (no
-    # valid prior week -- W27 doesn't exist). replace_week_plan is the fix:
-    # confirming it should produce ai_coach-authored real pool-session
-    # structure instead.
-    store = FileStore(base_dir=athletes_dir)
-    original_week = store.load_week("renee", "2026-W28")
-    original_pool_sessions = [s for s in original_week.sessions if s.sport == "swim_pool"]
-    assert original_pool_sessions, "fixture must have pool sessions to make this regression real"
-    assert all(s.source == "pool_coach" for s in original_pool_sessions)
-    assert all(s.structure is None for s in original_pool_sessions)
-
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    status_result = handlers["set_pool_coach_status"]({"has_pool_coach": False})
-    assert status_result == {"updated": True, "has_pool_coach": False}
-
-    confirmed = handlers["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True})
-    assert "error" not in confirmed
-    assert confirmed["persisted"] is True
-
-    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
-    new_pool_sessions = [s for s in reloaded.sessions if s.sport == "swim_pool"]
-    assert new_pool_sessions
-    for s in new_pool_sessions:
-        assert s.source == "ai_coach"
-        assert s.structure is not None
-        assert s.structure.strip() != ""
-
-
-# --- template_preference (create_week_plan / replace_week_plan) --------------
+# --- template_preference (merge_week_plan regenerate) ------------------------
 # 2026-W32 (2026-08-03 .. 2026-08-09) is the build block's FIRST week
 # (week_index_in_block == 0 -- the macro's real block boundaries in
 # athletes/renee/plan/macro.yaml have "build" starting exactly 2026-08-03, a
@@ -5101,111 +3525,178 @@ def _additional_swim_session(week):
     return next(s for s in week.sessions if s.purpose == "additional pool-independent aerobic volume")
 
 
-def test_create_week_plan_default_rotation_picks_build_0_descend(athletes_dir) -> None:
+def _persist_blank_week(store: FileStore, iso_week: str) -> None:
+    """A week on file with no sessions, so `merge_week_plan`'s diff has a current plan to compare
+    its regenerated proposal against."""
+    athlete = store.load_athlete("renee")
+    store.save_week(
+        "renee",
+        WeekPlan(
+            id=uuid.uuid4(), athlete_id=athlete.id, iso_week=iso_week, meso_block="base",
+            focus="blank", target_volume_m=0, sessions=[],
+        ),
+    )
+
+
+def _regenerated_structure(result: dict) -> str:
+    session = next(
+        s for s in result["proposed_plan"] if s["purpose"] == "additional pool-independent aerobic volume"
+    )
+    return session["structure"]
+
+
+def test_merge_week_plan_regeneration_default_rotation_picks_build_0_descend(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    _persist_blank_week(store, "2026-W32")
 
-    result = handlers["create_week_plan"]({"iso_week": "2026-W32"})
-    assert "error" not in result
+    result = handlers["merge_week_plan"]({"iso_week": "2026-W32"})
+    assert "error" not in result, result
 
-    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
-    session = _additional_swim_session(week)
-    assert "descend" in session.structure.lower()
-    assert "fins-assisted" not in session.structure
+    structure = _regenerated_structure(result)
+    assert "descend" in structure.lower()
+    assert "fins-assisted" not in structure
 
 
-def test_create_week_plan_with_template_preference_changes_selected_template(athletes_dir) -> None:
+def test_merge_week_plan_regeneration_with_template_preference_changes_selected_template(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    _persist_blank_week(store, "2026-W32")
 
-    result = handlers["create_week_plan"](
+    result = handlers["merge_week_plan"](
         {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
     )
-    assert "error" not in result
+    assert "error" not in result, result
+    assert "fins-assisted" in _regenerated_structure(result)
+    # Diff mode persists nothing.
+    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32").sessions == []
 
-    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
-    session = _additional_swim_session(week)
-    assert "fins-assisted" in session.structure
 
-
-def test_create_week_plan_invalid_template_preference_purpose_is_a_clean_error(athletes_dir) -> None:
+def test_merge_week_plan_invalid_template_preference_purpose_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    _persist_blank_week(store, "2026-W32")
 
-    result = handlers["create_week_plan"](
+    result = handlers["merge_week_plan"](
         {"iso_week": "2026-W32", "template_preference": {"purpose": "not_a_real_purpose"}}
     )
     assert "error" in result
     assert "template_preference" in result["error"]
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32") is None
 
 
-def test_create_week_plan_template_preference_matching_nothing_falls_back_with_a_warning(athletes_dir) -> None:
-    # 2026-W30 falls in the base block, which has no sprint_power template
-    # (only "aerobic_base" purpose templates apply to "base").
+def test_merge_week_plan_invalid_template_preference_interval_style_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
-    result = handlers["create_week_plan"](
-        {"iso_week": "2026-W30", "template_preference": {"purpose": "sprint_power"}}
-    )
-    # An unmet preference degrades to the default rotation with a warning; it never stops the week.
-    assert "error" not in result and result["created"] is True
-    assert any("default rotation" in w for w in result["planning_warnings"])
-    assert FileStore(base_dir=athletes_dir).load_week("renee", "2026-W30") is not None
-
-
-def test_replace_week_plan_with_template_preference_changes_selected_template_on_confirm(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    # Establish the default-rotation baseline first.
-    handlers["create_week_plan"]({"iso_week": "2026-W32"})
-    baseline_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
-    baseline_session = _additional_swim_session(baseline_week)
-    assert "fins-assisted" not in baseline_session.structure
-
-    result = handlers["replace_week_plan"](
-        {
-            "iso_week": "2026-W32",
-            "confirm": True,
-            "template_preference": {"purpose": "sprint_power"},
-        }
-    )
-    assert "error" not in result
-    assert result["persisted"] is True
-
-    reloaded_week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
-    reloaded_session = _additional_swim_session(reloaded_week)
-    assert "fins-assisted" in reloaded_session.structure
-
-
-def test_replace_week_plan_template_preference_draft_mode_does_not_persist(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    handlers["create_week_plan"]({"iso_week": "2026-W32"})
-
-    result = handlers["replace_week_plan"](
-        {"iso_week": "2026-W32", "template_preference": {"purpose": "sprint_power"}}
-    )
-    assert "error" not in result
-    assert result["persisted"] is False
-
-    # Still the unconstrained default on disk -- draft mode never persisted.
-    week = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W32")
-    session = _additional_swim_session(week)
-    assert "fins-assisted" not in session.structure
-
-
-def test_replace_week_plan_invalid_template_preference_interval_style_is_a_clean_error(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-
-    result = handlers["replace_week_plan"](
+    result = handlers["merge_week_plan"](
         {"iso_week": "2026-W28", "template_preference": {"interval_style": "not_a_real_style"}}
     )
     assert "error" in result
     assert "template_preference" in result["error"]
+
+
+def test_merge_week_plan_template_preference_matching_nothing_falls_back_with_a_warning(athletes_dir) -> None:
+    # 2026-W30 falls in the base block, which has no sprint_power template
+    # (only "aerobic_base" purpose templates apply to "base").
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    _persist_blank_week(store, "2026-W30")
+
+    result = handlers["merge_week_plan"](
+        {"iso_week": "2026-W30", "template_preference": {"purpose": "sprint_power"}}
+    )
+    # An unmet preference degrades to the default rotation; it never stops the week. (The
+    # fallback's own warning is not surfaced on the merge path -- only the sessions are.)
+    assert "error" not in result, result
+    assert result["proposed_plan"]
+
+
+def test_merge_week_plan_regeneration_of_a_bike_primary_week_produces_real_bike_sessions(
+    athletes_dir, run_tag
+) -> None:
+    """The primary_sport/ftp threading into `generate_week`: a bike-primary macro's regenerated week
+    must be real bike sessions, never a swim week (pool placeholders, long-swim ladder)."""
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    iso_week, _ = _bike_macro_via_tools(handlers, store, run_tag, "Merge Century")
+    _persist_blank_week(store, iso_week)
+
+    result = handlers["merge_week_plan"]({"iso_week": iso_week})
+    assert "error" not in result, result
+    assert len(result["proposed_plan"]) > 0
+
+    sports = {s["sport"] for s in result["proposed_plan"]}
+    assert "bike" in sports
+    # strength is the only non-bike sport a bike-primary week legitimately includes.
+    assert sports <= {"bike", "strength"}
+
+
+def test_merge_week_plan_regeneration_for_a_swim_event_matches_the_plain_engine_call(athletes_dir) -> None:
+    """Event.primary_sport defaults to "swim" -- the primary_sport=/ftp_watts= threading in
+    `_generate_candidate_week_for_merge` must be a no-op for the swim path: its proposal equals the
+    plain positional `generate_week` call."""
+    store = FileStore(base_dir=athletes_dir)
+    athlete = store.load_athlete("renee")
+    macro = store.load_macro("renee")
+    event = next(e for e in store.load_events("renee") if e.id == macro.event_id)
+    assert event.primary_sport == "swim"
+    _persist_blank_week(store, "2026-W30")
+
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    result = handlers["merge_week_plan"]({"iso_week": "2026-W30"})
+    assert "error" not in result, result
+
+    week_start = date.fromisocalendar(2026, 30, 1)
+    old_week = generate_week(athlete, macro, "2026-W30", week_start, event.event_format or "single_day", None, event)
+
+    def shape(sessions) -> list[tuple]:
+        return sorted((s["date"], s["sport"], s["distance_m"], s["duration_min"], s["purpose"]) for s in sessions)
+
+    assert shape(result["proposed_plan"]) == shape(
+        [
+            {
+                "date": s.date.isoformat(), "sport": s.sport, "distance_m": s.distance_m,
+                "duration_min": s.duration_min, "purpose": s.purpose,
+            }
+            for s in old_week.sessions
+        ]
+    )
+
+
+def test_merge_week_plan_regeneration_after_pool_coach_status_change_authors_real_pool_sessions(
+    athletes_dir,
+) -> None:
+    # 2026-W28's fixture pool sessions are pool_coach-source placeholders (has_pool_coach defaults
+    # True). After set_pool_coach_status(False), regenerating through merge_week_plan and accepting
+    # the pool slots must write ai_coach-authored sessions with real structure.
+    store = FileStore(base_dir=athletes_dir)
+    original_pool = [s for s in store.load_week("renee", "2026-W28").sessions if s.sport == "swim_pool"]
+    assert original_pool and all(s.source == "pool_coach" and s.structure is None for s in original_pool)
+
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert handlers["set_pool_coach_status"]({"has_pool_coach": False}) == {"updated": True, "has_pool_coach": False}
+
+    diff = handlers["merge_week_plan"]({"iso_week": "2026-W28"})
+    assert "error" not in diff, diff
+    picks = [
+        {"date": d["date"], "sport": d["sport"]}
+        for d in diff["diff"] if d["sport"] == "swim_pool" and d["status"] == "differs"
+    ]
+    assert picks
+
+    draft = handlers["merge_week_plan"]({"iso_week": "2026-W28", "accept_from_proposed": picks})
+    assert "error" not in draft, draft
+    confirmed = handlers["merge_week_plan"](
+        {"iso_week": "2026-W28", "accept_from_proposed": picks, "confirm": True, "draft_id": draft["draft_id"]}
+    )
+    assert confirmed["persisted"] is True, confirmed
+
+    reloaded = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
+    new_pool = [s for s in reloaded.sessions if s.sport == "swim_pool"]
+    assert new_pool
+    for session in new_pool:
+        assert session.source == "ai_coach"
+        assert session.structure is not None and session.structure.strip() != ""
 
 
 # --- set_event_active_status ---------------------------------------------------
@@ -5285,54 +3776,6 @@ def test_set_event_active_status_non_boolean_active_is_an_error(athletes_dir) ->
         {"event_name": GREECE_EVENT_NAME, "active": "yes"}
     )
     assert "error" in result
-
-
-def test_draft_macro_plan_can_resolve_and_build_toward_a_deactivated_event(athletes_dir, run_tag) -> None:
-    # Confirms no accidental active-filtering broke draft_macro_plan's own
-    # event-by-name lookup: a deactivated event must still resolve, since the
-    # athlete might reactivate it and (re)build a macro toward it, or an old
-    # macro might still reference it historically.
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    name = f"Test Deactivated Macro Event [{run_tag}]"
-    handlers["create_event"](
-        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
-    )
-    handlers["set_event_active_status"]({"event_name": name, "active": False})
-    event = next(e for e in store.load_events("renee") if e.name == name)
-    assert event.active is False
-
-    result = handlers["draft_macro_plan"](
-        {"event_name": name, "current_weekly_volume_m": 15000, "start_date": "2027-01-01"}
-    )
-
-    assert "error" not in result
-    assert result["created"] is True
-    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded_macro.event_id == event.id
-
-
-def test_replace_macro_plan_can_resolve_and_build_toward_a_deactivated_event(athletes_dir) -> None:
-    # Same confirmation as above, for replace_macro_plan's event lookup.
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    handlers["set_event_active_status"]({"event_name": GREECE_EVENT_NAME, "active": False})
-    event = next(e for e in store.load_events("renee") if e.name == GREECE_EVENT_NAME)
-    assert event.active is False
-
-    result = handlers["replace_macro_plan"](
-        {
-            "event_name": GREECE_EVENT_NAME,
-            "current_weekly_volume_m": 18000,
-            "start_date": "2026-01-05",
-            "confirm": True,
-        }
-    )
-
-    assert "error" not in result
-    assert result["persisted"] is True
-    reloaded_macro = FileStore(base_dir=athletes_dir).load_macro("renee")
-    assert reloaded_macro.event_id == event.id
 
 
 # --- propose_session_adjustment -------------------------------------------------
@@ -6285,11 +4728,11 @@ def test_session_overrides_add_mode_creates_a_new_session(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     assert "error" not in baseline
     add_date = "2026-07-06"  # the week's Monday, normally left open
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [
             {
@@ -6315,10 +4758,10 @@ def test_session_overrides_add_mode_creates_a_new_session(athletes_dir) -> None:
 def test_session_overrides_add_mode_onto_an_existing_session_edits_it_with_a_note(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     existing = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [
             {
@@ -6340,7 +4783,7 @@ def test_session_overrides_add_mode_onto_an_existing_session_edits_it_with_a_not
 def test_session_overrides_add_mode_defaults_missing_core_fields_with_notes(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": "2026-07-06", "add": True, "sport": "bike"}],
     })
@@ -6360,10 +4803,10 @@ def test_session_overrides_add_mode_defaults_missing_core_fields_with_notes(athl
 def test_session_overrides_remove_mode_deletes_the_matching_session(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": target["date"], "sport": target["sport"], "remove": True}],
     })
@@ -6378,16 +4821,16 @@ def test_session_overrides_remove_mode_deletes_the_matching_session(athletes_dir
 def test_session_overrides_remove_mode_persists_only_on_confirm(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
     override = [{"date": target["date"], "sport": target["sport"], "remove": True}]
 
-    draft = handlers["replace_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
+    draft = handlers["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": override})
     assert draft["persisted"] is False
     on_disk = FileStore(base_dir=athletes_dir).load_week("renee", "2026-W28")
     assert any(s.date.isoformat() == target["date"] and s.sport == target["sport"] for s in on_disk.sessions)
 
-    confirmed = handlers["replace_week_plan"]({
+    confirmed = handlers["patch_week_plan"]({
         "iso_week": "2026-W28", "session_overrides": override, "confirm": True,
     })
     assert confirmed["persisted"] is True
@@ -6399,7 +4842,7 @@ def test_session_overrides_remove_mode_no_matching_session_is_a_clean_error(athl
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": "2099-01-01", "remove": True}],
     })
@@ -6411,14 +4854,14 @@ def test_session_overrides_remove_mode_no_matching_session_is_a_clean_error(athl
 def test_session_overrides_remove_mode_ambiguous_date_without_sport_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
 
     date_counts = Counter(s["date"] for s in baseline["sessions"])
     multi_session_date = next((d for d, count in date_counts.items() if count > 1), None)
     if multi_session_date is None:
         pytest.skip("this fixture week has no day with more than one session to test ambiguity against")
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{"date": multi_session_date, "remove": True}],
     })
@@ -6430,10 +4873,10 @@ def test_session_overrides_remove_mode_ambiguous_date_without_sport_is_a_clean_e
 def test_session_overrides_remove_and_add_together_is_a_clean_error(athletes_dir) -> None:
     store = FileStore(base_dir=athletes_dir)
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    baseline = handlers["replace_week_plan"]({"iso_week": "2026-W28"})
+    baseline = _seed_generated_week(athletes_dir)
     target = baseline["sessions"][0]
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": "2026-W28",
         "session_overrides": [{
             "date": target["date"], "sport": target["sport"], "remove": True, "add": True,
@@ -6450,7 +4893,7 @@ def test_session_overrides_remove_only_hard_bike_day_is_allowed_and_flagged(athl
     handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
     iso_week, _macro = _bike_macro_via_tools(handlers, store, run_tag, "RemoveHardDay")
 
-    baseline = handlers["replace_week_plan"]({"iso_week": iso_week})
+    baseline = _seed_generated_week(athletes_dir, iso_week)
     assert "error" not in baseline, baseline
     # The JSON response has no `intensity` field (see `_week_sessions_json`)
     # -- the week's differentiated hard bike day is identifiable by purpose
@@ -6462,7 +4905,7 @@ def test_session_overrides_remove_only_hard_bike_day_is_allowed_and_flagged(athl
         if s["sport"] == "bike" and "aerobic base" not in s["purpose"]
     )
 
-    result = handlers["replace_week_plan"]({
+    result = handlers["patch_week_plan"]({
         "iso_week": iso_week,
         "session_overrides": [{"date": hard["date"], "sport": "bike", "remove": True}],
     })
@@ -6483,7 +4926,7 @@ def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_ta
 
     year, wk = iso_week.split("-W")
     monday = date.fromisocalendar(int(year), int(wk), 1)
-    baseline = handlers["replace_week_plan"]({"iso_week": iso_week})
+    baseline = _seed_generated_week(athletes_dir, iso_week)
     bike_dates = {s["date"] for s in baseline["sessions"] if s["sport"] == "bike"}
 
     # add a hard bike day on every date the generated week leaves free --
@@ -6502,7 +4945,7 @@ def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_ta
         if (monday + timedelta(days=d)).isoformat() not in bike_dates
     ]
     assert len(overrides) >= 2
-    result = handlers["replace_week_plan"]({"iso_week": iso_week, "session_overrides": overrides})
+    result = handlers["patch_week_plan"]({"iso_week": iso_week, "session_overrides": overrides})
     assert "error" not in result, result
     warnings_out = result.get("planning_warnings") or []
     assert warnings_out, "expected the guardrail to surface warnings, not silently clamp"
@@ -6513,10 +4956,9 @@ def test_appended_hard_bike_days_trip_the_realism_guardrail(athletes_dir, run_ta
 # ===========================================================================
 # patch_week_plan (backend/week-plan-patch-and-merge)
 # -------------------------------------------------------------------------
-# Real, confirmed bug this fixes: `replace_week_plan` ALWAYS calls
-# `generate_week` first -- a full fresh regeneration -- so even a careful
-# `session_overrides` call can silently drop already-persisted, bespoke
-# sessions that the regeneration doesn't reproduce. `patch_week_plan`
+# Real, confirmed bug this fixes (in the since-removed `replace_week_plan`, which ALWAYS
+# regenerated the whole week first and could silently drop already-persisted, bespoke
+# sessions): `patch_week_plan`
 # operates directly on the persisted week (no `generate_week` call at all),
 # so every session NOT named in `session_overrides` is guaranteed
 # byte-for-byte unchanged. See feedback bf699e7f-1905-476c-ab1b-
@@ -6565,8 +5007,7 @@ def test_patch_week_plan_no_existing_week_is_a_clean_error(athletes_dir) -> None
         {"iso_week": "2026-W50", "session_overrides": [{"date": "2026-12-07", "purpose": "x"}]}
     )
     assert "error" in result
-    assert "create_week_plan" in result["error"]
-    assert "replace_week_plan" in result["error"]
+    assert "author_week_plan" in result["error"]
 
 
 def test_patch_week_plan_draft_mode_does_not_persist(athletes_dir) -> None:
@@ -6734,8 +5175,7 @@ def test_patch_week_plan_realism_guardrail_flags_ramp_over_prior_week(athletes_d
 
     year, wk = iso_week.split("-W")
     monday = date.fromisocalendar(int(year), int(wk), 1)
-    baseline = handlers["replace_week_plan"]({"iso_week": iso_week, "confirm": True})
-    assert "error" not in baseline, baseline
+    baseline = _seed_generated_week(athletes_dir, iso_week)
     bike_dates = {s["date"] for s in baseline["sessions"] if s["sport"] == "bike"}
 
     free_dates = [
@@ -6805,7 +5245,7 @@ def test_merge_week_plan_no_existing_week_is_a_clean_error(athletes_dir) -> None
     # 2026-W50 has no week file in the fixture tree.
     result = handlers["merge_week_plan"]({"iso_week": "2026-W50"})
     assert "error" in result
-    assert "create_week_plan" in result["error"]
+    assert "author_week_plan" in result["error"]
 
 
 def test_merge_week_plan_in_schema_and_handlers(athletes_dir) -> None:
@@ -7286,30 +5726,6 @@ def test_taper_one_shot_with_no_draft_is_flagged(athletes_dir, taper_as_of) -> N
     assert any("ONE step" in w for w in done["planning_warnings"])
 
 
-def test_season_macro_confirm_writes_exactly_the_agreed_macro(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    slug = "andrew"
-    athlete = store.load_athlete(slug)
-    _clear_workouts(athletes_dir, slug)
-    _log_consistent_bike_history(store, slug, athlete.id, weeks=20, as_of=_SHARPENING_AS_OF)
-    _add_bike_event(store, slug, athlete.id, name="Race A3", event_date=_SHARPENING_AS_OF + timedelta(weeks=4), priority="A")
-    _add_bike_event(store, slug, athlete.id, name="Race B3", event_date=_SHARPENING_AS_OF + timedelta(weeks=12), priority="B")
-    handlers = build_tool_handlers(store, slug=slug, expert_mode=False)
-    args = {"event_names": ["Race A3", "Race B3"], "current_weekly_volume_m": 300, "peak_weekly_volume_m": 500,
-            "start_date": _SHARPENING_AS_OF.isoformat()}
-
-    draft = handlers["draft_season_macro_plan"](args)
-    assert draft["persisted"] is False and draft["draft_id"]
-
-    done = handlers["draft_season_macro_plan"]({**args, "peak_weekly_volume_m": 900, "confirm": True, "draft_id": draft["draft_id"]})
-
-    assert done["persisted"] is True and done["written_from_draft"] is True and done["verified"] is True
-    saved = FileStore(base_dir=athletes_dir).load_macro(slug)
-    assert [(b["name"], b["weekly_volume_target_m"]) for b in draft["blocks"]] == [
-        (b.name, b.weekly_volume_target_m) for b in saved.blocks
-    ]
-
-
 def test_taper_and_season_macro_confirm_need_only_the_draft_id(athletes_dir, taper_as_of) -> None:
     store = FileStore(base_dir=athletes_dir)
     athlete = store.load_athlete("renee")
@@ -7561,6 +5977,29 @@ def test_author_macro_plan_unknown_event_name_names_existing_events(athletes_dir
     })
     assert "error" in result
     assert GREECE_EVENT_NAME in result["error"]
+
+
+def test_author_macro_plan_can_resolve_a_deactivated_event(athletes_dir, run_tag) -> None:
+    # A deactivated event must still resolve by name: the athlete might reactivate it and (re)build
+    # a macro toward it, or an old macro might still reference it historically.
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    name = f"Test Deactivated Macro Event [{run_tag}]"
+    handlers["create_event"](
+        {"name": name, "event_date": "2027-06-01", "distance_m": 20000, "priority": "B"}
+    )
+    handlers["set_event_active_status"]({"event_name": name, "active": False})
+    event = next(e for e in store.load_events("renee") if e.name == name)
+    assert event.active is False
+
+    result = handlers["author_macro_plan"]({
+        "event_names": [name],
+        "weeks": _simple_macro_weeks(date(2027, 1, 4)),
+        "architecture": "x",
+    })
+
+    assert "error" not in result, result
+    assert result["persisted"] is False
 
 
 def test_author_macro_plan_missing_required_fields_are_errors(athletes_dir) -> None:
@@ -7975,20 +6414,6 @@ def test_propose_adaptation_no_longer_holds_a_writable_draft(athletes_dir) -> No
 # --- TOOLS_SCHEMA / handlers registration ------------------------------------
 
 
-def test_new_planning_tools_are_registered_and_old_ones_are_unexposed_but_kept(athletes_dir) -> None:
-    store = FileStore(base_dir=athletes_dir)
-    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
-    schema_names = {t["name"] for t in TOOLS_SCHEMA}
-
-    for name in ("author_macro_plan", "author_week_plan", "check_plan"):
-        assert name in schema_names
-        assert name in handlers
-
-    for name in ("draft_macro_plan", "replace_macro_plan", "draft_season_macro_plan", "create_week_plan", "replace_week_plan"):
-        assert name not in schema_names  # unexposed
-        assert name in handlers  # handler code kept in place, per the approved plan
-
-
 def test_structured_schema_documents_bike_watts() -> None:
     from app.tools import SESSION_OVERRIDES_SCHEMA
 
@@ -8142,3 +6567,16 @@ def test_author_week_plan_draft_findings_carry_category(athletes_dir) -> None:
     by_id = {f["id"]: f["category"] for f in findings}
     assert by_id["no-structured-workout"] == "authoring"
     assert all(c == "judgment" for i, c in by_id.items() if i.startswith("confirm-"))
+
+
+def test_retired_generator_tools_are_neither_in_the_schema_nor_the_handlers(athletes_dir) -> None:
+    retired = {
+        "draft_macro_plan", "replace_macro_plan", "draft_season_macro_plan",
+        "create_week_plan", "replace_week_plan",
+    }
+    store = FileStore(base_dir=athletes_dir)
+    handlers = build_tool_handlers(store, slug="renee", expert_mode=False)
+    assert not retired & {t["name"] for t in TOOLS_SCHEMA}
+    assert not retired & set(handlers)
+    live = {"author_macro_plan", "author_week_plan", "check_plan"}
+    assert live <= set(handlers) and live <= {t["name"] for t in TOOLS_SCHEMA}

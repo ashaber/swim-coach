@@ -149,8 +149,3 @@ def test_a_half_applied_entry_is_rolled_back_before_the_text_only_retry(athletes
     assert ride["purpose"] == "Ride" and ride["duration_min"] == 60          # text-only retry applied
     assert len([s for s in add["sessions"] if s["date"] == "2026-07-07" and s["sport"] == "bike"]) == 1   # no duplicate from the failed attempt
 
-
-def test_replace_week_plan_isolates_entries_too(athletes_dir) -> None:
-    store, h = _h(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": WEEK, "session_overrides": [GOOD, NO_SUCH_DAY]})
-    assert "error" not in draft and [f["date"] for f in draft["not_applied"]] == ["2026-08-30"]

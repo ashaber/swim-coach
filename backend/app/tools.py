@@ -29,7 +29,7 @@ all). It ALWAYS also creates a linked `Feedback` row with
 two) in the SAME call -- a human coach seeing this is not a second,
 optional step the AI might forget to take; one tool call guarantees both the
 durable record and human visibility. This tool does NOT gate or alter any
-plan-generation tool (`propose_adaptation`/`create_week_plan`/etc.) -- it
+plan tool (`propose_adaptation`/`author_week_plan`/etc.) -- it
 only makes the status durable and visible; auto-blocking training on it is
 explicitly out of scope for this build (see the build's own PR description).
 
@@ -61,26 +61,9 @@ real, unknown ceiling). `swim_coach.plan._bike_2x20_test_structure`/
 description and `context.py`'s "don't hand-author what the engine already
 knows how to build" guidance, which now covers this case too.
 
-`create_event`/`draft_macro_plan`/`create_week_plan` are the "chat can create,
-not just adapt" tools: they call the exact same deterministic engine
-functions the CLI/skills already use (`swim_coach.plan.scaffold_macro`,
-`swim_coach.plan.generate_week`) and persist their output directly, rather
-than drafting. This is intentionally different from `propose_adaptation`'s
-draft-only contract -- these three only ever create content that doesn't
-exist yet (a new event, a first macro for an event, a missing week), so
-there's nothing already-active for a bad call to disrupt. Adapting an
-already-active week stays `propose_adaptation`'s job, unchanged: a human
-still confirms via `/adapt` before an active week's volume changes.
-
-`replace_macro_plan` handles the opposite case from `draft_macro_plan`: a
-macro that already exists (for the resolved event or a different one), the
-target event changing, or an existing macro that's broken/unusable (e.g. an
-all-zero-volume macro from the since-fixed zero-current-volume ramp-cap bug
-in `swim_coach.plan.scaffold_macro`). Because replacing an already-active
-macro can invalidate training the athlete has already done against it, this
-tool follows `propose_adaptation`'s draft-then-confirm shape rather than
-`draft_macro_plan`'s direct-persist one: `confirm=False` (default) only
-computes and returns the candidate, `confirm=True` persists.
+`create_event` is the "chat can create, not just adapt" tool: it only ever
+creates content that doesn't exist yet (a new event), so it persists directly
+and there's nothing already-active for a bad call to disrupt.
 
 `set_pool_coach_status` flips `Athlete.has_pool_coach` (Part 3: no real
 masters coach on hand means `swim_coach.plan.generate_week` must author real
@@ -96,24 +79,6 @@ persists directly rather than going through `propose_adaptation`'s
 draft-then-confirm shape: unlike an adaptation, there's no rule-table
 recompute for a bad call to have gotten wrong.
 
-`replace_week_plan` closes a real structural dead end: `create_week_plan`
-refuses if iso_week already has a week on file ("use propose_adaptation
-instead"), and `propose_adaptation` refuses if there's no valid prior week to
-adapt from. When BOTH are true -- an existing week needs regenerating (e.g.
-`has_pool_coach` just changed, or the week was built under a stale/replaced
-macro) and there's no valid prior week to adapt from -- neither tool can
-touch it. `replace_week_plan` is the same shape as `replace_macro_plan`: it
-calls `swim_coach.plan.generate_week` (the same engine function
-`create_week_plan` uses) with NO guard against an existing week -- that's
-exactly its purpose -- and follows draft-then-confirm rather than
-direct-persist, since overwriting an already-active week can invalidate
-training the athlete has already done against it: `confirm=False` (default)
-only computes and returns the candidate (plus a comparison against whatever
-week is currently on file for that iso_week, if any) as JSON with
-`"persisted": false`, never calling `store.save_week`; `confirm=True`
-recomputes identically (generate_week is a pure function of its inputs, so
-this is safe to re-run) and persists, overwriting whatever was there.
-
 `set_event_active_status` is a soft delete/reactivate for an `Event`: flips
 `Event.active` (default `True`, purely additive) so a cancelled event can be
 archived from conversation without removing it from `events.yaml` -- a
@@ -124,8 +89,7 @@ hard delete, and deliberately reactivatable: `active=False` then
 is a low-risk status flag, not a plan/volume change, so it persists directly
 via `store.save_events` (the whole list, matching that store method's
 replace-the-list contract) -- no draft/confirm step. Existing event-by-id
-lookups elsewhere in this file (`draft_macro_plan`/`replace_macro_plan`/
-`propose_adaptation`) deliberately do NOT filter by `active` -- an inactive
+lookups elsewhere in this file (`propose_adaptation`) deliberately do NOT filter by `active` -- an inactive
 event must still resolve if the athlete reactivates it or an old macro still
 references it historically. `active` only changes how the model *talks
 about* events in conversation (see PERSONA_AND_RULES), never which events
@@ -144,7 +108,7 @@ session's structured content (or, lacking that, its bare distance_m/
 duration_min) in place, never regenerating it from a different template --
 against a `session.model_copy(deep=True)` of the matched session, so the
 week on file is never touched until `confirm=True`. Same draft-then-confirm
-shape as `replace_week_plan`/`replace_macro_plan`: `confirm` defaults to
+shape as `patch_week_plan`/`author_macro_plan`: `confirm` defaults to
 `False`, which only computes and returns the candidate adjusted session
 (plus a comparison against the session as currently on file: old vs. new
 distance_m/duration_min, old vs. new structured step count) as JSON with
@@ -164,11 +128,8 @@ unsafe direction.
 `author_macro_plan`/`author_week_plan`/`check_plan` (engine/plan-check-red-team
 PR 2 -- "the coach authors plans; the engine red-teams them," see
 `~/.claude/plans/just-exploring-a-design-cheeky-pretzel.md`'s PR 2 section)
-supersede `draft_macro_plan`/`replace_macro_plan`/`draft_season_macro_plan`/
-`create_week_plan`/`replace_week_plan` as the coach's ONLY way to author a
-macro/week plan going forward -- those five are retired from `TOOLS_SCHEMA`
-below (handlers/engine code kept in place, unexposed, for one release before
-deletion). The coach supplies the plan directly (`MacroPlan.weeks`, real
+are the coach's ONLY way to author a macro/week plan (they replaced five
+older generator tools, now removed). The coach supplies the plan directly (`MacroPlan.weeks`, real
 `Session`s); `swim_coach.plan_check.check_macro`/`check_week` compute
 projections from the athlete's REAL logged CTL/ATL/hours and red-team the
 result -- advisory findings only (severity/evidence/consequence/fix), never
@@ -183,7 +144,7 @@ finding additionally needs `athlete_words`, the same pattern
 the one hard stop CLAUDE.md's safety rail requires: a `confirm-*` finding
 (weekly volume +8%, long-swim step +15%) needs the athlete's own words in
 `athlete_confirmations`, or nothing is written. `propose_adaptation` is now
-ADVISORY ONLY (its old write path, `replace_week_plan`, is retired) -- it
+ADVISORY ONLY -- it
 hands the coach numbers to inform an `author_week_plan` draft, rather than
 holding a directly-confirmable one itself.
 """
@@ -216,7 +177,6 @@ from swim_coach.formatting import duration_min_for_distance
 from swim_coach.canonical_laps import build_canonical_laps
 from swim_coach.gps_laps import GpsLapMetrics, analyze_laps
 from swim_coach.load import (
-    _training_base_evidence,
     ctl_atl_tsb_series,
     daily_loads,
     estimate_hr_max,
@@ -231,13 +191,6 @@ from swim_coach.race_phases import (
     phase_difference_is_significant,
     split_race_phases,
 )
-# `_training_base_evidence` is `has_established_training_base`'s own shared
-# implementation -- `_training_base_evidence(...).established` IS `has_
-# established_training_base(...)`'s return value (see load.py: the public
-# function is a thin wrapper over this), called here directly (not the
-# public wrapper) only so this handler can ALSO surface the real evidence
-# behind that boolean (`established_base_evidence` in the response below)
-# without computing it twice.
 from swim_coach.race_day import (
     find_plan as find_race_plan,
     new_plan_from_template as new_race_plan,
@@ -275,24 +228,17 @@ from swim_coach.models import (
 from swim_coach.ow_session_templates import build_ow_session
 from swim_coach.plan_check import check_macro, check_week, prose_only_pushable_sessions, swim_basis_steps
 from swim_coach.plan import (
-    MIN_MACRO_WEEKS,
     SESSION_ADJUSTMENT_INCREASE_CAP_PCT,
-    SHARPENING_MIN_MACRO_WEEKS,
     WEEKLY_VOLUME_RAMP_CAP,
     counts_toward_bike_ramp,
     _template_week_sessions,
     bike_session_as,
     template_normalization_notes,
-    _monday_of_week,
-    _monday_on_or_after,
     _session_is_hard_bike,
     adjust_session,
     count_structured_steps,
     evaluate_week_realism,
     generate_week,
-    scaffold_macro,
-    scaffold_season_macro,
-    scaffold_sharpening_macro,
 )
 from swim_coach.session_lookup import (
     AmbiguousSession,
@@ -369,7 +315,7 @@ RIDE_PACING_LAPS_CAP = 40
 # this name for backward compatibility (existing tests import it from here).
 SYNC_WORKOUTS_WINDOW_DAYS = ON_DEMAND_SYNC_WINDOW_DAYS
 
-# Shared `template_preference` schema for `create_week_plan`/`replace_week_plan`
+# Shared `template_preference` schema for `merge_week_plan`
 # (see `_parse_template_preference` below) -- the tool-facing surface for
 # `swim_coach.workout_templates.find_templates`/`TemplatePreference`, letting
 # the coach honor a request like "more kettlebell work" or "give me a
@@ -428,11 +374,8 @@ NOTATION_DESCRIPTION = (
     "default to warm-up/cool-down. Bike only."
 )
 
-# Shared by `replace_week_plan` (applied to a freshly-regenerated week) and
-# `patch_week_plan` (applied to the actual persisted week, see that tool's
-# handler) -- both drive the exact same `_apply_session_overrides` match/
-# modify/remove/add semantics, so one schema describes the shape for both
-# rather than drifting into two copies that quietly diverge over time.
+# Shared by `patch_week_plan` and `merge_week_plan`'s regenerate path -- both drive the exact same
+# `_apply_session_overrides` match/modify/remove/add semantics, so one schema describes the shape.
 _SESSION_KIND_SCHEMA: dict[str, Any] = {
     "type": "string",
     "enum": list(get_args(SessionKind)),
@@ -1160,7 +1103,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "source": {
                     "type": "string",
                     "enum": ["field_test", "ramp_test", "race_file", "app_estimate", "self_reported_historical"],
-                    "description": "'field_test' -- a real standalone test that isn't the ramp-test protocol (e.g. a swim CSS time-trial pair, a 20-min FTP test, or the 2x20 two-effort FTP test -- see swim_coach.plan._bike_2x20_test_structure/ftp_from_2x20_test, the real engine-built protocol for this case; prescribe THAT via create_week_plan/session_overrides rather than hand-inventing your own bike interval structure for an FTP test, since a genuine test's work efforts must never carry a fixed power target -- see this file's own module docstring and context.py's guidance). 'ramp_test' -- the ramp-to-failure protocol specifically (swim_coach.plan._bike_ramp_test_structure). 'race_file' -- derived from an actual race/event file. 'app_estimate' -- a platform's own algorithmic estimate (e.g. 'TrainerRoad AI FTP detection'), real signal but modelled, not directly tested. 'self_reported_historical' -- the athlete's own recollection of an old value with no real test behind it (Andrew's own example: 'I was 350w 10 years ago').",
+                    "description": "'field_test' -- a real standalone test that isn't the ramp-test protocol (e.g. a swim CSS time-trial pair, a 20-min FTP test, or the 2x20 two-effort FTP test -- see swim_coach.plan._bike_2x20_test_structure/ftp_from_2x20_test, the real engine-built protocol for this case; prescribe THAT via author_week_plan rather than hand-inventing your own bike interval structure for an FTP test, since a genuine test's work efforts must never carry a fixed power target -- see this file's own module docstring and context.py's guidance). 'ramp_test' -- the ramp-to-failure protocol specifically (swim_coach.plan._bike_ramp_test_structure). 'race_file' -- derived from an actual race/event file. 'app_estimate' -- a platform's own algorithmic estimate (e.g. 'TrainerRoad AI FTP detection'), real signal but modelled, not directly tested. 'self_reported_historical' -- the athlete's own recollection of an old value with no real test behind it (Andrew's own example: 'I was 350w 10 years ago').",
                 },
                 "notes": {
                     "type": "string",
@@ -1514,7 +1457,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "`clear: true` removes the template. ALWAYS call it WITHOUT `confirm` first, read the "
             "returned `week` grid and any `warnings` back to the athlete, and only call again with "
             "`confirm: true` after they agree in a new message. It does not change weeks already on "
-            "file -- rebuild those with replace_week_plan's usual draft-then-confirm. Taper and race "
+            "file -- rebuild those with author_week_plan's usual draft-then-confirm. Taper and race "
             "weeks ignore it (the engine's taper/race placement wins, and says so). Volume comes from "
             "the macro's ramp-capped target; the template never sets load."
         ),
@@ -2060,8 +2003,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "only says what UNIT the target is measured in "
                         "(distance/duration/load), not which sport. Set "
                         "'bike' for a cycling event (e.g. a timed century "
-                        "ride) so draft_macro_plan/create_week_plan/ "
-                        "replace_week_plan/propose_adaptation generate real "
+                        "ride) so the generators generate real "
                         "bike sessions for it instead of a swim week."
                     ),
                 },
@@ -2282,7 +2224,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "athlete hasn't specified either -- ask which of the known "
             "products (formula_369, maurten_gel_100, tailwind) they're "
             "actually using. "
-            "**Draft-then-confirm, like draft_season_macro_plan:** "
+            "**Draft-then-confirm:** "
             "`confirm` defaults to false, which only computes and returns "
             "the plan (plus a preview of the pre-event nutrition session, "
             "if `event_name` is given), never persisting. Set `confirm: "
@@ -2292,7 +2234,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "prep entry (deliverable 5: reuses existing WeekPlan/session "
             "infrastructure, NOT a new race-day timeline) onto the calendar "
             "day before the event -- requires a week plan to already exist "
-            "for that date (create_week_plan first if not). Never pass "
+            "for that date (author_week_plan first if not). Never pass "
             "confirm=true on the first call for a given request."
         ),
         "input_schema": {
@@ -2425,7 +2367,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "immediately -- a low-risk status flag, not a plan/volume "
             "change, so no draft/confirm step is needed. Use when the "
             "athlete says they've started or stopped working with a pool "
-            "coach. Affects future generate_week/create_week_plan output "
+            "coach. Affects future generate_week output "
             "only -- it does not retroactively change already-generated "
             "weeks."
         ),
@@ -2615,31 +2557,18 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "description": (
             "Change or remove ONE OR A FEW already-planned session(s) within "
             "an already-live week, WITHOUT touching anything else in that "
-            "week. Use this instead of replace_week_plan whenever the "
-            "request is really just 'change Thursday's session' / 'drop "
-            "Wednesday's strength day' / 'make Friday's swim easier' -- "
-            "replace_week_plan ALWAYS regenerates the WHOLE week from "
-            "scratch via generate_week first, which has no memory of "
-            "anything not part of its own deterministic output; a real "
-            "confirmed bug (see replace_week_plan's own description) is "
-            "that even a careful session_overrides list can silently lose "
-            "an already-persisted, bespoke session that fresh regeneration "
-            "wouldn't otherwise reproduce, unless EVERY currently-correct "
-            "session is re-specified in the same call. patch_week_plan has "
-            "no such risk: it operates directly on the week ALREADY on file "
-            "for iso_week -- there is no generate_week call anywhere in "
-            "this tool -- so every session not named in session_overrides "
-            "is guaranteed byte-for-byte unchanged, not just 'unchanged if "
-            "you remembered to re-add it'.\n\n"
-            "`session_overrides` here works IDENTICALLY to "
-            "replace_week_plan's own field of the same name (same schema, "
-            "same modify/add('add':true)/remove('remove':true) modes, same "
-            "date+sport matching and ambiguity errors) -- see that field's "
-            "own description for the full authoring options (distance_m/"
-            "duration_min, purpose/structure/structured, ow_template). The "
-            "only difference is WHAT it's applied to: the real persisted "
-            "week here, a throwaway fresh regeneration there.\n\n"
-            "Draft-then-confirm, same discipline as replace_week_plan: "
+            "week. Use this for a request that is really just 'change "
+            "Thursday's session' / 'drop Wednesday's strength day' / "
+            "'make Friday's swim easier'. It operates directly on the "
+            "week ALREADY on file for iso_week -- nothing is regenerated "
+            "-- so every session not named in session_overrides is "
+            "guaranteed byte-for-byte unchanged.\n\n"
+            "`session_overrides`: modify / add('add':true) / remove("
+            "'remove':true) modes, date+sport matching with ambiguity "
+            "errors; see that field's own description for the authoring "
+            "options (distance_m/duration_min, purpose/structure/"
+            "structured, ow_template).\n\n"
+            "Draft-then-confirm: "
             "`confirm` defaults to false, only computing and returning the "
             "candidate patched week (plus any realism `planning_warnings`, "
             "e.g. an `add`-ed session pushing bike volume past the +8%/week "
@@ -2655,7 +2584,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "properties": {
                 "iso_week": {
                     "type": "string",
-                    "description": "ISO week to patch, formatted 'YYYY-Wnn', e.g. '2026-W30'. Must already have a persisted week plan (use create_week_plan first if not).",
+                    "description": "ISO week to patch, formatted 'YYYY-Wnn', e.g. '2026-W30'. Must already have a persisted week plan (use author_week_plan first if not).",
                 },
                 "session_overrides": SESSION_OVERRIDES_SCHEMA,
                 "draft_id": {
@@ -2693,7 +2622,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "without guessing which side wins on any overlap -- the coach "
             "sees exactly what differs, then explicitly picks which slots "
             "to take from the proposed side. Use this instead of "
-            "patch_week_plan/replace_week_plan whenever there's a real "
+            "patch_week_plan whenever there's a real "
             "PROPOSED alternative to compare against current (a candidate "
             "regeneration, a generated nutrition session, etc.) rather than "
             "a specific hand-described change to make directly.\n\n"
@@ -2716,10 +2645,9 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "swim_coach.fueling.build_pre_event_nutrition_session, or any "
             "coach-authored session) OR, if `proposed_sessions` is omitted, "
             "a fresh generate_week regeneration of the whole week (same "
-            "computation replace_week_plan makes) -- use this to reconcile "
+            "computation) -- use this to reconcile "
             "a stale/regenerated week against whatever's already live, "
-            "honoring `template_preference` the same way replace_week_plan "
-            "does.\n\n"
+            "honoring `template_preference`.\n\n"
             "**Phase 2 -- selective merge (call WITH `accept_from_"
             "proposed`, even as an empty list)**: same `iso_week` (and same "
             "`template_preference` if the proposed side was a regeneration "
@@ -2755,7 +2683,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "description": (
                         "ISO week to diff/merge, formatted 'YYYY-Wnn', e.g. "
                         "'2026-W30'. Must already have a persisted week plan "
-                        "(use create_week_plan first if not)."
+                        "(use author_week_plan first if not)."
                     ),
                 },
                 "proposed_sessions": {
@@ -2866,8 +2794,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "draft/confirm step is needed. Treat active=false events as "
             "archived in conversation: don't suggest or reference them as "
             "live targets unless the athlete specifically asks about that "
-            "event by name. Does not affect draft_macro_plan/"
-            "replace_macro_plan/propose_adaptation's own event lookups -- "
+            "event by name. Does not affect propose_adaptation's "
+            "own event lookups -- "
             "those still resolve an inactive event correctly by name/id if "
             "the athlete wants to build or rebuild a macro toward it."
         ),
@@ -2914,7 +2842,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "session falls on that date -- an entry matching zero or more "
             "than one session is an error (with the same 'found N' error "
             "style), never a silent guess.\n\n"
-            "Draft-then-confirm, same shape as replace_week_plan: `confirm` "
+            "Draft-then-confirm: `confirm` "
             "defaults to false, which only computes and returns the "
             "candidate adjusted session (plus a comparison against the "
             "session as currently on file: old vs. new distance_m, old vs. "
@@ -2926,8 +2854,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "its week. Never pass confirm=true on the first call for a "
             "given request, and never chain another tool call in the same "
             "response after the draft -- stop and wait for the athlete's "
-            "explicit agreement in a new message, same discipline as "
-            "replace_week_plan/replace_macro_plan.\n\n"
+            "explicit agreement in a new message.\n\n"
             "`direction`+`magnitude_pct` together describe the (signed) "
             "adjustment -- there is one mechanism for both directions, not "
             "two separate tools. `magnitude_pct` is clamped before use: "
@@ -3076,8 +3003,7 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "(e.g. for anxiety/confidence reasons, per this athlete's own "
             "real advisory-panel input), rather than presenting it as the "
             "one obviously-correct answer.\n\n"
-            "Draft-then-confirm, same shape as propose_adaptation/"
-            "replace_week_plan: confirm=false (default) only computes and "
+            "Draft-then-confirm, same shape as propose_adaptation: confirm=false (default) only computes and "
             "returns the candidate shape + session preview as JSON with "
             "\"persisted\": false, never touching any week on file. "
             "confirm=true writes the generated sessions into the athlete's "
@@ -3141,17 +3067,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             "markdown table -- deterministically, in code, spending NO "
             "thinking or output tokens on the table itself. Call this "
             "instead of narrating a full day-by-day plan yourself after a "
-            "plan-build tool (draft_macro_plan / replace_macro_plan / "
-            "create_week_plan / replace_week_plan / propose_adaptation / "
-            "propose_session_adjustment): keep your own reply a short "
+            "plan-build tool (author_macro_plan / author_week_plan / "
+            "propose_adaptation / propose_session_adjustment): keep your own reply a short "
             "summary, and use this for the full table when the athlete "
             "wants it.\n\n"
             "`target`: an ISO week id like '2026-W30', or 'current' / "
             "'next' for this / next week, or 'macro' for the macrocycle "
             "block table. Reads from storage -- so it only works for a plan "
-            "that's actually been persisted (the create_* tools and "
-            "draft_macro_plan persist immediately; the replace_* / "
-            "propose_* drafts do NOT until confirmed). For an unconfirmed "
+            "that's actually been persisted (drafts from the author_* / "
+            "propose_* tools do NOT persist until confirmed). For an unconfirmed "
             "draft, lay the days out from the draft tool result's own "
             "`sessions` array instead. The weekly volume figure is "
             "sport-aware: a swim athlete sees a metres target, a non-swim "
@@ -3228,7 +3152,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
         }
 
     # current_week loaded successfully, but that alone doesn't mean it's a
-    # valid adaptation baseline -- after replace_macro_plan moves the macro
+    # valid adaptation baseline -- after a macro replacement moves the macro
     # to a new event with a different (later) start date, the OLD week
     # plans from before that start date are still sitting on disk. Without
     # this check, they'd get silently adapted from as if still active,
@@ -3246,7 +3170,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
                 f"the week before {iso_week!r} ({current_iso!r}) predates the "
                 f"current macro (which starts {macro_start}) -- "
                 "expected right after a macro replacement or a fresh start, not a "
-                f"gap. Use create_week_plan for {iso_week!r} instead, since it's "
+                f"gap. Use author_week_plan for {iso_week!r} instead, since it's "
                 "effectively the first week of the current plan."
             )
         }
@@ -3254,7 +3178,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
         # Distinct from the predates-start case above: here iso_week itself
         # (not just the prior week) is also beyond macro_end, since
         # current_week_start is iso_week's own week_start minus 7 days --
-        # create_week_plan would refuse for the same reason (it checks the
+        # author_week_plan would refuse for the same reason (it checks the
         # same macro range), so pointing at it here would just trade one
         # dead end for another. The real fix is a new macro for whatever
         # comes next.
@@ -3263,8 +3187,8 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
                 f"the week before {iso_week!r} ({current_iso!r}) falls after "
                 f"the current macro ends ({macro_end}) -- {iso_week!r} is "
                 "beyond this macro's plan entirely, not a gap within it. "
-                "Build a new macro (draft_macro_plan or replace_macro_plan) "
-                "for whatever comes next, then create_week_plan for its "
+                "Build a new macro (author_macro_plan) "
+                "for whatever comes next, then author_week_plan for its "
                 "first week."
             )
         }
@@ -3309,8 +3233,7 @@ def _handle_propose_adaptation(input_data: dict[str, Any], *, store: StoreInterf
         return {"error": str(exc)}
 
     # ADVISORY ONLY (engine/plan-check-red-team PR 2): this used to hold a
-    # directly-confirmable draft, written via `replace_week_plan` -- now
-    # retired from TOOLS_SCHEMA (the coach authors weeks directly via
+    # directly-confirmable draft (the coach now authors weeks directly via
     # `author_week_plan`). No draft is held here any more; there is nothing
     # for a later confirm to write, since `author_week_plan` is where the
     # real sessions get authored and red-teamed (via `check_week`), not a
@@ -3370,7 +3293,7 @@ def _handle_get_plan_summary(input_data: dict[str, Any], *, store: StoreInterfac
                     {"name": b.name, "start": b.start_date.isoformat(), "end": b.end_date.isoformat()}
                     for b in macro.blocks
                 ],
-                "note": "create_week_plan/replace_week_plan only work for weeks inside this range.",
+                "note": "author_week_plan only works for weeks inside this range.",
             },
         }
     return summary
@@ -4187,7 +4110,7 @@ def _handle_set_weekly_template(
         result["weeks_on_file_not_changed"] = on_file
         result["rebuild_hint"] = (
             "These weeks are already saved and are NOT changed by saving a template. To rebuild one "
-            "from it, use replace_week_plan (draft first, show the athlete, then confirm)."
+            "from it, use author_week_plan (draft first, show the athlete, then confirm)."
         )
 
     if input_data.get("confirm") is not True:
@@ -5708,712 +5631,10 @@ def _handle_create_event(input_data: dict[str, Any], *, store: StoreInterface, s
     }
 
 
-def _handle_draft_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Three-way shape selection, all real, none silent (sharpening-macro
-    build -- see `swim_coach.plan.scaffold_sharpening_macro`'s own
-    docstring for the shape itself):
-
-    1. `weeks_available >= MIN_MACRO_WEEKS` -> `swim_coach.plan.
-       scaffold_macro` (the same function `cli.py`'s `scaffold-macro`
-       command and the `/onboard-athlete` skill use), EXACTLY as before
-       this build -- its own ramp-cap/taper/peak sizing is why a brand-new
-       macro is safe to persist immediately.
-    2. `weeks_available` between `SHARPENING_MIN_MACRO_WEEKS` and
-       `MIN_MACRO_WEEKS` (exclusive) AND `swim_coach.load.has_established_
-       training_base` says True against the athlete's REAL logged workout
-       history (`store.list_workouts`/`store.list_wellness` ->
-       `swim_coach.load.daily_loads` -- never asserted, never inferred from
-       this conversation) -> `scaffold_sharpening_macro`. The response's
-       own `shape`/`shape_reason`/`established_base_evidence` fields say
-       exactly which shape fired and why, using the real evidence numbers
-       `has_established_training_base` computed -- never a bare "trust me."
-    3. Neither -> the existing, unchanged refusal: calling `scaffold_macro`
-       and letting its own `MIN_MACRO_WEEKS` `ValueError` fire, byte-
-       identical to this tool's behavior before this build (including for
-       an athlete who has no established base at all -- the new shape must
-       never fire for that athlete, so this is the correct, deliberate
-       fallback, not a stopgap).
-
-    `weeks_available` here uses the exact same whole-weeks-from-the-next-
-    Monday-to-the-event's-Monday arithmetic `scaffold_macro`/
-    `scaffold_sharpening_macro` each already do internally
-    (`_monday_on_or_after`/`_monday_of_week`) -- computed once here only so
-    this handler can decide WHICH of them to call; neither engine function
-    is changed to expose it.
-
-    Guarded, same as before this build, against ever replacing an existing
-    macro tied to the same event: revising one is a separate, not-yet-built
-    concern (`replace_macro_plan`).
-    """
-    event_name = input_data.get("event_name")
-    if not event_name:
-        return {"error": "event_name is required"}
-    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
-    if current_weekly_volume_m is None:
-        return {"error": "current_weekly_volume_m is required"}
-
-    try:
-        current_weekly_volume_m = int(current_weekly_volume_m)
-    except (TypeError, ValueError):
-        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
-
-    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
-    if peak_weekly_volume_m is not None:
-        try:
-            peak_weekly_volume_m = int(peak_weekly_volume_m)
-        except (TypeError, ValueError):
-            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
-
-    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
-    # from this handler's own original shape) so an omitted `start_date`
-    # defaults to this athlete's own local today (`athlete_today`, honoring
-    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='athlete profile', exc_info=True)
-        return storage_error("athlete profile", exc)
-
-    start_str = input_data.get("start_date")
-    if start_str:
-        try:
-            start = date.fromisoformat(start_str)
-        except ValueError:
-            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
-    else:
-        start = athlete_today(athlete)
-
-    try:
-        events = store.load_events(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='events', exc_info=True)
-        return storage_error("events", exc)
-    event = next((e for e in events if e.name == event_name), None)
-    if event is None:
-        known_names = [e.name for e in events]
-        return {
-            "error": (
-                f"no event named {event_name!r} for this athlete; known "
-                f"event names: {known_names}"
-            )
-        }
-
-    event = effective_target(event, events)  # a grouped event plans toward its group's peak race
-
-    try:
-        existing_macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='macro plan', exc_info=True)
-        return storage_error("macro plan", exc)
-    if existing_macro is not None and existing_macro.event_id == event.id:
-        return {
-            "error": (
-                f"a macro plan already exists for {event_name!r}; "
-                "draft_macro_plan is only for a brand-new macro -- use "
-                "replace_macro_plan (draft-then-confirm) to revise or "
-                "replace it instead"
-            )
-        }
-
-    weeks_available = (_monday_of_week(event.event_date) - _monday_on_or_after(start)).days // 7
-    established_base_evidence: dict[str, Any] | None = None
-    shape: str
-    shape_reason: str
-
-    if weeks_available >= MIN_MACRO_WEEKS:
-        shape = "base_build_peak_taper"
-        shape_reason = (
-            f"{weeks_available} weeks of runway before {event_name!r} is enough "
-            f"({MIN_MACRO_WEEKS}+) for the standard base->build->peak->taper macro."
-        )
-        try:
-            macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
-        except ValueError as exc:
-            return {"error": str(exc)}
-    else:
-        try:
-            workouts = store.list_workouts(slug)
-            wellness = store.list_wellness(slug)
-        except Exception as exc:  # noqa: BLE001
-            log.error("storage read failed", what='workout/wellness history', exc_info=True)
-            return storage_error("workout/wellness history", exc)
-        loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
-        evidence = _training_base_evidence(loads, start)
-        established_base_evidence = {
-            "established": evidence.established,
-            "lookback_weeks": evidence.lookback_weeks,
-            "lookback_start": evidence.lookback_start.isoformat(),
-            "earliest_logged_day": (
-                evidence.earliest_logged_day.isoformat() if evidence.earliest_logged_day else None
-            ),
-            "weeks_with_load": evidence.weeks_with_load,
-            "min_weeks_with_load_fraction": evidence.min_weeks_with_load_fraction,
-            "ctl_at_as_of": round(evidence.ctl_at_as_of, 1),
-        }
-        if (
-            evidence.established
-            and weeks_available >= SHARPENING_MIN_MACRO_WEEKS
-            and event.primary_sport == "bike"
-        ):
-            # Sharpening-macro build scope: bike-primary events only, for
-            # now -- `generate_week`'s swim path was never audited/extended
-            # to understand "hold"/"sharpen" blocks (see `MacroBlock.name`'s
-            # own docstring and `scaffold_sharpening_macro`'s docstring).
-            # Gating here, at the one real call site, is what makes that
-            # scope boundary actually true in practice, not just documented.
-            shape = "hold_sharpen_taper"
-            shape_reason = (
-                f"only {weeks_available} weeks of runway before {event_name!r} -- "
-                f"not enough for base->build->peak->taper ({MIN_MACRO_WEEKS}+ "
-                "needed) -- but this athlete's real logged training history shows "
-                f"an established base: load present in {evidence.weeks_with_load} "
-                f"of the trailing {evidence.lookback_weeks} weeks (reaching back to "
-                f"{evidence.earliest_logged_day}), current CTL "
-                f"{evidence.ctl_at_as_of:.0f} AU. Using the shorter "
-                "hold->sharpen->taper sharpening macro instead of refusing."
-            )
-            try:
-                macro = scaffold_sharpening_macro(
-                    athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m
-                )
-            except ValueError as exc:
-                return {"error": str(exc)}
-        else:
-            # Neither shape fits -- reuse scaffold_macro's own refusal
-            # unchanged (including the exact case this shape exists for but
-            # is deliberately refusing: no established base on file, so the
-            # sharpening macro must not fire even though the runway alone
-            # would otherwise qualify for it -- see evidence above).
-            if not evidence.established:
-                shape_reason = (
-                    f"only {weeks_available} weeks of runway before {event_name!r}, "
-                    "and this athlete's real logged training history does not show "
-                    "an established base (load present in only "
-                    f"{evidence.weeks_with_load} of the trailing "
-                    f"{evidence.lookback_weeks} weeks) -- refusing rather than "
-                    "guessing at either macro shape."
-                )
-            elif weeks_available < SHARPENING_MIN_MACRO_WEEKS:
-                shape_reason = (
-                    f"only {weeks_available} weeks of runway before {event_name!r} -- "
-                    f"below even the sharpening macro's own minimum "
-                    f"({SHARPENING_MIN_MACRO_WEEKS} weeks) -- refusing rather than "
-                    "producing a degenerate plan."
-                )
-            else:
-                shape_reason = (
-                    f"only {weeks_available} weeks of runway before {event_name!r}, and "
-                    "this athlete's real logged training history does show an "
-                    "established base -- but the sharpening macro is scoped to "
-                    f"bike-primary events for now (this event's primary_sport is "
-                    f"{event.primary_sport!r}), so refusing rather than using a "
-                    "shape this event's sport hasn't been extended to support."
-                )
-            try:
-                macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
-            except ValueError as exc:
-                return {"error": str(exc)}
-            # scaffold_macro always raises for weeks_available < MIN_MACRO_WEEKS
-            # (the only way this branch is reached) -- this line is unreachable
-            # in practice, kept only so the branch is total if that invariant
-            # ever changes.
-            shape = "base_build_peak_taper"
-
-    store.save_macro(slug, macro)
-
-    log.info(
-        "macro plan drafted",
-        athlete=slug,
-        event_name=event_name,
-        macro_id=str(macro.id),
-        shape=shape,
-        weeks_available=weeks_available,
-    )
-    return {
-        "created": True,
-        "event_name": event_name,
-        "shape": shape,
-        "shape_reason": shape_reason,
-        "weeks_available": weeks_available,
-        "established_base_evidence": established_base_evidence,
-        "blocks": _macro_blocks_json(macro),
-    }
-
-
-def _macro_blocks_json(macro) -> list[dict[str, Any]]:
-    return [
-        {
-            "name": block.name,
-            "start_date": block.start_date.isoformat(),
-            "end_date": block.end_date.isoformat(),
-            "weekly_volume_target_m": block.weekly_volume_target_m,
-            "focus": block.focus,
-        }
-        for block in macro.blocks
-    ]
-
-
 # Macro drafts ride in the tested week-draft store, so no migration is needed (a macro table
 # holds exactly one row per athlete): the MacroPlan is carried as JSON inside a WeekPlan
 # record held under a valid-format week no real plan will ever use.
 _MACRO_CARRIER_WEEK = MACRO_CARRIER_WEEK
-
-
-def _hold_macro_draft(store: StoreInterface, slug: str, athlete: Athlete, macro: MacroPlan, *, tool: str) -> str | None:
-    carrier = WeekPlan(
-        id=uuid.uuid4(),
-        athlete_id=athlete.id,
-        iso_week=_MACRO_CARRIER_WEEK,
-        meso_block="macro-draft",
-        focus="held macro draft",
-        target_volume_m=0,
-        sessions=[],
-        adaptation_rationale=json.dumps({"macro": macro.model_dump(mode="json")}),
-        draft=True,
-    )
-    return _hold_draft(store, slug, carrier, tool=tool)
-
-
-def _confirm_macro_from_draft(
-    store: StoreInterface, slug: str, input_data: dict[str, Any], *, tool: str
-) -> dict[str, Any] | None:
-    """Write the macro the athlete AGREED to, verbatim -- never recompute it (the macro drives
-    every later week, so a drifted recomputation is the worst place for it). Same rules as
-    `_confirm_from_draft`. Flags (never blocks) that it replaces the macro currently on file."""
-    draft_id = input_data.get("draft_id")
-    carrier, stop = _load_draft_safely(store, slug, _MACRO_CARRIER_WEEK, draft_id, tool=tool)
-    if stop is not None:
-        return stop
-    if carrier is None:
-        if draft_id:
-            return {
-                "persisted": False,
-                "error": (
-                    f"macro draft {draft_id!r} was not found. Nothing was written. Call {tool} without "
-                    "`confirm` to make a new draft, show the athlete, then confirm with that draft_id."
-                ),
-            }
-        return None
-    if not draft_id and (carrier.drafted_by not in (None, tool) or _draft_is_stale(carrier)):
-        return None
-    macro = MacroPlan.model_validate(json.loads(carrier.adaptation_rationale or "{}")["macro"])
-    warnings: list[str] = []
-    try:
-        current = store.load_macro(slug)
-    except Exception:  # noqa: BLE001
-        log.warn("swallowed exception, using a default", where='backend/app/tools.py', line_hint=4745, exc_info=True)
-        current = None
-    if current is not None and current.id != macro.id:
-        warnings.append(
-            f"This replaces the macro plan currently on file (id {current.id}, "
-            f"{current.blocks[0].start_date} to {current.blocks[-1].end_date}). Written exactly as agreed."
-        )
-    store.save_macro(slug, macro)
-    _gc_consumed_drafts(store, slug, _MACRO_CARRIER_WEEK, tool=tool)
-    reloaded = store.load_macro(slug)
-    verified = reloaded is not None and reloaded.id == macro.id
-    log.info("macro written from agreed draft", athlete=slug, tool=tool, macro_id=str(macro.id), verified=verified)
-    return {
-        "blocks": _macro_blocks_json(macro),
-        "persisted": True,
-        "written_from_draft": True,
-        "draft_id": str(carrier.id),
-        "verified": verified,
-        "warnings": warnings,
-    }
-
-
-def _handle_replace_macro_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Computes a candidate replacement macro via `scaffold_macro` (the same
-    engine function `draft_macro_plan` uses, now with the zero-current-
-    volume ramp-cap fix) for exactly the case `draft_macro_plan` refuses --
-    a macro already exists, whether for this event or a different one. No
-    guard against an existing macro: that's this tool's whole purpose.
-
-    Follows `propose_adaptation`'s draft-then-confirm shape rather than
-    `draft_macro_plan`'s direct-persist one, per Andrew's confirmed policy:
-    replacing an already-active macro can invalidate training the athlete
-    has already done against it, so `confirm=False` (default) only computes
-    and returns the candidate + a comparison against the current macro (if
-    any), never calling `store.save_macro`; `confirm=True` recomputes
-    identically (scaffold_macro is a pure function of its inputs, so this is
-    safe to re-run) and persists.
-    """
-    if bool(input_data.get("confirm", False)):
-        # Before ANY other validation: the draft_id alone must be enough (the coach has lost the
-        # draft turn's inputs -- history is text only).
-        agreed = _confirm_macro_from_draft(store, slug, input_data, tool="replace_macro_plan")
-        if agreed is not None:
-            return {**({"event_name": input_data.get("event_name")} if "replace_macro_plan" == "replace_macro_plan" else {}), **agreed}
-
-    event_name = input_data.get("event_name")
-    if not event_name:
-        return {"error": "event_name is required"}
-    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
-    if current_weekly_volume_m is None:
-        return {"error": "current_weekly_volume_m is required"}
-
-    try:
-        current_weekly_volume_m = int(current_weekly_volume_m)
-    except (TypeError, ValueError):
-        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
-
-    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
-    if peak_weekly_volume_m is not None:
-        try:
-            peak_weekly_volume_m = int(peak_weekly_volume_m)
-        except (TypeError, ValueError):
-            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
-
-    confirm = bool(input_data.get("confirm", False))
-
-    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
-    # from this handler's own original shape) so an omitted `start_date`
-    # defaults to this athlete's own local today (`athlete_today`, honoring
-    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='athlete profile', exc_info=True)
-        return storage_error("athlete profile", exc)
-
-    start_str = input_data.get("start_date")
-    if start_str:
-        try:
-            start = date.fromisoformat(start_str)
-        except ValueError:
-            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
-    else:
-        start = athlete_today(athlete)
-
-    try:
-        events = store.load_events(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='events', exc_info=True)
-        return storage_error("events", exc)
-    event = next((e for e in events if e.name == event_name), None)
-    if event is None:
-        known_names = [e.name for e in events]
-        return {
-            "error": (
-                f"no event named {event_name!r} for this athlete; known "
-                f"event names: {known_names}"
-            )
-        }
-
-    event = effective_target(event, events)  # a grouped event plans toward its group's peak race
-
-    try:
-        existing_macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='macro plan', exc_info=True)
-        return storage_error("macro plan", exc)
-
-    try:
-        macro = scaffold_macro(athlete, event, start, current_weekly_volume_m, peak_weekly_volume_m)
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-    comparison = None
-    if existing_macro is not None:
-        old_event = next((e for e in events if e.id == existing_macro.event_id), None)
-        old_peak = next((b.weekly_volume_target_m for b in existing_macro.blocks if b.name == "peak"), None)
-        new_peak = next((b.weekly_volume_target_m for b in macro.blocks if b.name == "peak"), None)
-        comparison = {
-            "old_event_name": old_event.name if old_event is not None else None,
-            "old_peak_weekly_volume_m": old_peak,
-            "new_event_name": event_name,
-            "new_peak_weekly_volume_m": new_peak,
-        }
-
-    if not confirm:
-        draft_id = _hold_macro_draft(store, slug, athlete, macro, tool="replace_macro_plan")
-        return {
-            "event_name": event_name,
-            "blocks": _macro_blocks_json(macro),
-            "comparison": comparison,
-            "persisted": False,
-            **(
-                {
-                    "draft_id": draft_id,
-                    "next": (
-                        "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
-                        "this draft_id -- that writes EXACTLY this macro, not a recomputation."
-                    ),
-                }
-                if draft_id
-                else {}
-            ),
-        }
-
-    store.save_macro(slug, macro)
-
-    log.info("macro plan replaced", athlete=slug, event_name=event_name, macro_id=str(macro.id))
-    return {
-        "event_name": event_name,
-        "blocks": _macro_blocks_json(macro),
-        "comparison": comparison,
-        "persisted": True,
-        "written_without_draft": _NO_DRAFT_WARNING,
-    }
-
-
-def _handle_draft_season_macro_plan(
-    input_data: dict[str, Any], *, store: StoreInterface, slug: str
-) -> dict[str, Any]:
-    """Multi-race-season-macro build. Scaffolds a season-spanning MacroPlan
-    across MULTIPLE races via `swim_coach.plan.scaffold_season_macro` --
-    chaining a per-race sequence of the existing `scaffold_macro`/
-    `scaffold_sharpening_macro` shapes into ONE `MacroPlan`, graduated by
-    each race's existing `Event.priority` (see that function's own
-    docstring and `library/31-multi-race-season-periodization.md`).
-
-    **This is the real fix for the literal, logged failure mode** (feedback
-    entry 2026-09-11): the athlete's macro is one-per-athlete
-    (`store.load_macro`/`save_macro`), and `draft_macro_plan`/
-    `replace_macro_plan` only ever considered a single `event_id` --
-    drafting toward one race could silently orphan whatever macro was
-    already covering a different one. This tool ALWAYS follows
-    `replace_macro_plan`'s own draft-then-confirm shape, regardless of
-    whether a macro already exists: `confirm` defaults to false, which only
-    computes and returns the candidate season macro plus an explicit
-    `coverage` comparison against whatever macro already exists on file --
-    specifically, which already-covered race(s), if any, this call would
-    stop covering -- never calling `store.save_macro`. Show this to the
-    athlete and get their explicit agreement before calling again with
-    `confirm: true`. Never pass `confirm: true` on the first call for a
-    given request.
-
-    `event_names` (required, list of >= 2): every name must already match
-    an existing `Event` for this athlete exactly, and every race must share
-    `primary_sport == "bike"` -- `scaffold_season_macro` itself refuses a
-    mixed-sport list; this handler additionally scopes real invocation to
-    bike-primary races only, matching `scaffold_sharpening_macro`'s own
-    existing scope boundary (see `library/31`'s "Sport scope" header).
-    Cross-sport season planning (e.g. this athlete's swim goals alongside
-    a cyclocross season) is a real, deliberately unresolved coaching
-    decision, not something this tool guesses at -- refuses with a clear
-    error rather than silently picking one sport's races.
-
-    `established_base` is computed here exactly once (same
-    `_training_base_evidence` helper `draft_macro_plan` already uses,
-    against the athlete's REAL logged workout/wellness history, never
-    asserted or inferred from conversation) and applies to every race in
-    the season -- matching `scaffold_season_macro`'s own single-parameter
-    design.
-
-    **IDEA 018 -- extend-an-active-plan mode.** `existing_macro` (already
-    loaded here, now BEFORE the `scaffold_season_macro` call rather than
-    after, specifically so it can be threaded through) is forwarded into
-    `scaffold_season_macro` unconditionally -- that function itself decides
-    whether it actually covers this call's chronologically-first race and,
-    if so, reuses it instead of re-deriving that race's shape from a fresh
-    `start` (see its own docstring for the full design). This is what lets
-    "fill in the rest of an already-loaded race roster" succeed instead of
-    re-deriving -- and potentially hard-refusing -- race 1's already-real,
-    already-persisted cycle. The result's `warnings` key (plain list of
-    strings, empty unless it actually fired) surfaces
-    `scaffold_season_macro`'s own extend-mode runway degrade -- shown to
-    the athlete same as `coverage`, on both a draft (`confirm=false`) and a
-    confirmed call, never silently dropped.
-    """
-    if bool(input_data.get("confirm", False)):
-        # Before ANY other validation: the draft_id alone must be enough (the coach has lost the
-        # draft turn's inputs -- history is text only).
-        agreed = _confirm_macro_from_draft(store, slug, input_data, tool="draft_season_macro_plan")
-        if agreed is not None:
-            return {**({"event_name": input_data.get("event_name")} if "draft_season_macro_plan" == "replace_macro_plan" else {}), **agreed}
-
-    event_names = input_data.get("event_names")
-    if not event_names or not isinstance(event_names, list) or len(event_names) < 2:
-        return {"error": "event_names is required and must list at least 2 races"}
-
-    current_weekly_volume_m = input_data.get("current_weekly_volume_m")
-    if current_weekly_volume_m is None:
-        return {"error": "current_weekly_volume_m is required"}
-    try:
-        current_weekly_volume_m = int(current_weekly_volume_m)
-    except (TypeError, ValueError):
-        return {"error": f"invalid current_weekly_volume_m {current_weekly_volume_m!r}"}
-
-    peak_weekly_volume_m = input_data.get("peak_weekly_volume_m")
-    if peak_weekly_volume_m is not None:
-        try:
-            peak_weekly_volume_m = int(peak_weekly_volume_m)
-        except (TypeError, ValueError):
-            return {"error": f"invalid peak_weekly_volume_m {peak_weekly_volume_m!r}"}
-
-    confirm = bool(input_data.get("confirm", False))
-
-    # `athlete` loaded BEFORE resolving `start_date`'s default (reordered
-    # from this handler's own original shape) so an omitted `start_date`
-    # defaults to this athlete's own local today (`athlete_today`, honoring
-    # `Athlete.timezone` when set) rather than server-UTC `date.today()`.
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='athlete profile', exc_info=True)
-        return storage_error("athlete profile", exc)
-
-    start_str = input_data.get("start_date")
-    if start_str:
-        try:
-            start = date.fromisoformat(start_str)
-        except ValueError:
-            return {"error": f"invalid start_date {start_str!r}; expected format 'YYYY-MM-DD'"}
-    else:
-        start = athlete_today(athlete)
-
-    try:
-        events = store.load_events(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='events', exc_info=True)
-        return storage_error("events", exc)
-
-    races: list[Event] = []
-    missing_names: list[str] = []
-    for name in event_names:
-        event = next((e for e in events if e.name == name), None)
-        if event is None:
-            missing_names.append(name)
-        else:
-            races.append(event)
-    if missing_names:
-        known_names = [e.name for e in events]
-        return {
-            "error": (
-                f"no event(s) named {missing_names!r} for this athlete; "
-                f"known event names: {known_names}"
-            )
-        }
-
-    non_bike = [race.name for race in races if race.primary_sport != "bike"]
-    if non_bike:
-        return {
-            "error": (
-                f"draft_season_macro_plan is scoped to primary_sport='bike' "
-                f"races for now (same scope boundary as the sharpening "
-                f"macro shape) -- {non_bike!r} are not bike-primary. "
-                "Cross-sport season planning is a separate, unresolved "
-                "coaching decision (see library/31-multi-race-season-"
-                "periodization.md's \"what's not resolved\" section), not "
-                "something this tool guesses at."
-            )
-        }
-
-    past_races = [race.name for race in races if race.event_date <= start]
-    if past_races:
-        return {
-            "error": (
-                f"{past_races!r} are on or before start ({start}) -- "
-                "draft_season_macro_plan only plans forward; drop "
-                "already-past races from event_names."
-            )
-        }
-
-    try:
-        workouts = store.list_workouts(slug)
-        wellness = store.list_wellness(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='workout/wellness history', exc_info=True)
-        return storage_error("workout/wellness history", exc)
-    loads = daily_loads(workouts, athlete=athlete, wellness=wellness)
-    evidence = _training_base_evidence(loads, start)
-    established_base_evidence = {
-        "established": evidence.established,
-        "lookback_weeks": evidence.lookback_weeks,
-        "lookback_start": evidence.lookback_start.isoformat(),
-        "earliest_logged_day": (
-            evidence.earliest_logged_day.isoformat() if evidence.earliest_logged_day else None
-        ),
-        "weeks_with_load": evidence.weeks_with_load,
-        "min_weeks_with_load_fraction": evidence.min_weeks_with_load_fraction,
-        "ctl_at_as_of": round(evidence.ctl_at_as_of, 1),
-    }
-
-    try:
-        existing_macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='macro plan', exc_info=True)
-        return storage_error("macro plan", exc)
-
-    try:
-        macro, macro_warnings = scaffold_season_macro(
-            athlete,
-            races,
-            start,
-            current_weekly_volume_m,
-            established_base=evidence.established,
-            peak_weekly_volume_m=peak_weekly_volume_m,
-            existing_macro=existing_macro,
-        )
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-    # The literal fix for the logged failure mode: make any coverage LOSS
-    # explicit and visible before persisting, rather than silently
-    # overwriting whatever the athlete's existing macro was covering.
-    coverage: dict[str, Any] | None = None
-    if existing_macro is not None:
-        old_event_ids = existing_macro.event_ids or [existing_macro.event_id]
-        new_event_ids = set(macro.event_ids)
-        events_by_id = {e.id: e for e in events}
-        coverage = {
-            "old_race_names": [
-                events_by_id[eid].name for eid in old_event_ids if eid in events_by_id
-            ],
-            "would_lose_coverage_for": [
-                events_by_id[eid].name
-                for eid in old_event_ids
-                if eid not in new_event_ids and eid in events_by_id
-            ],
-        }
-
-    dedicated_race_ids = {block.race_event_id for block in macro.blocks if block.race_event_id is not None}
-    race_summary = [
-        {
-            "event_name": race.name,
-            "event_date": race.event_date.isoformat(),
-            "priority": race.priority,
-            "got_dedicated_cycle": race.id in dedicated_race_ids,
-        }
-        for race in sorted(races, key=lambda race: race.event_date)
-    ]
-
-    result: dict[str, Any] = {
-        "event_names": [race.name for race in races],
-        "race_summary": race_summary,
-        "established_base_evidence": established_base_evidence,
-        "coverage": coverage,
-        "blocks": _macro_blocks_json(macro),
-        # IDEA 018 item 2: never-persisted, surfaced same way `coverage` is --
-        # empty unless scaffold_season_macro's extend-mode degrade actually
-        # fired (established_base=True, extending a plan with real existing
-        # coverage for race 1, AND a tier's runway came up short). Show this
-        # to the athlete same as `coverage`, never silently drop it.
-        "warnings": macro_warnings,
-        "persisted": False,
-    }
-    if not confirm:
-        draft_id = _hold_macro_draft(store, slug, athlete, macro, tool="draft_season_macro_plan")
-        if draft_id:
-            result["draft_id"] = draft_id
-            result["next"] = (
-                "Nothing is written yet. When the athlete agrees, call again with `confirm: true` and "
-                "this draft_id -- that writes EXACTLY this season macro, not a recomputation."
-            )
-        return result
-
-    result["written_without_draft"] = _NO_DRAFT_WARNING
-    store.save_macro(slug, macro)
-    log.info(
-        "season macro plan drafted",
-        athlete=slug,
-        event_names=[race.name for race in races],
-        macro_id=str(macro.id),
-    )
-    result["persisted"] = True
-    return result
 
 
 _FUELING_PRODUCT_KEYS = tuple(sorted(fueling_module.PRODUCTS))
@@ -6483,20 +5704,19 @@ def _handle_compute_fueling_plan(
     build's brief -- never silently trusting the calculator's own
     conservative fallback without saying so), and optionally persists a
     Session-shaped pre-event nutrition entry via the same generic
-    `_apply_session_overrides` "add" path `replace_week_plan` already
+    `_apply_session_overrides` "add" path `patch_week_plan` already
     exposes (deliverable 5 -- see `swim_coach.fueling.
     build_pre_event_nutrition_session`'s own docstring for why this is
     deliberately distinct from `plan._race_week_checklist`'s existing
     generic `carb_load` reminder).
 
-    Draft-then-confirm, matching `draft_season_macro_plan`: `confirm`
+    Draft-then-confirm: `confirm`
     defaults to False (compute + preview only); `confirm=True` requires
     `event_name` (nothing to persist without a target date) and an
     ALREADY-EXISTING week plan covering the day before the event -- this
     tool does not create/regenerate a week itself, only appends one session
     to an existing one (same direct load->mutate->save shape
-    `reschedule_session` already uses, not `replace_week_plan`'s full
-    regenerate-then-override shape, since nothing else about the week
+    `reschedule_session` already uses, since nothing else about the week
     needs to change).
     """
     duration_min = input_data.get("duration_min")
@@ -6672,7 +5892,7 @@ def _handle_compute_fueling_plan(
                     "error": (
                         f"no existing week plan for {iso_week!r} (covering "
                         f"{session.date.isoformat()}, the day before {event_name!r}) -- "
-                        "use create_week_plan first, then call compute_fueling_plan again "
+                        "use author_week_plan first, then call compute_fueling_plan again "
                         "with confirm=true"
                     )
                 }
@@ -6786,20 +6006,14 @@ def _generate_week_tolerant(
     **kwargs: Any,
 ) -> WeekPlan:
     """`generate_week`, except a `template_preference` the library has no template for (an equipment
-    or style preference like kettlebells) DEGRADES to the default rotation with a warning instead of
+    or style preference like kettlebells) DEGRADES to the default rotation instead of
     failing the whole week -- an unmet preference must never stop the coach writing the plan."""
     try:
         return generate_week(athlete, macro, iso_week, week_start, event_format, template_preference, event, **kwargs)
     except ValueError as exc:
         if template_preference is None or "no workout templates match" not in str(exc):
             raise
-    week = generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
-    week.planning_warnings = list(week.planning_warnings) + [
-        "No library workout template matches the requested preference, so the default rotation was used. "
-        "Write the specific content the athlete asked for yourself (`purpose` / `structure`, as coach "
-        "judgment) and log the gap with flag_for_coach_review (research_gap: true) -- do not refuse."
-    ]
-    return week
+    return generate_week(athlete, macro, iso_week, week_start, event_format, None, event, **kwargs)
 
 
 def _held_bike_minutes(store: StoreInterface, slug: str, week_start: date) -> float | None:
@@ -6842,116 +6056,6 @@ def _week_generation_kwargs(
         # non-bike macro and for a week no macro block covers.
         kwargs["template_bike_minutes"] = _held_bike_minutes(store, slug, week_start)
     return kwargs
-
-
-def _handle_create_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Calls `swim_coach.plan.generate_week` directly (the same function
-    `cli.py`'s `plan-week` command and the `/plan-week` skill use) and
-    persists the result -- only for a week that doesn't exist yet at all;
-    an already-active week stays `propose_adaptation`'s job, unchanged.
-
-    Optional `template_preference` (see `TEMPLATE_PREFERENCE_SCHEMA`) is
-    forwarded straight through to `generate_week`, narrowing which main-set
-    library template the week's pool-independent swim sessions use instead
-    of the default blind rotation (see `swim_coach.workout_templates.
-    TemplatePreference`/`find_templates`)."""
-    iso_week = input_data.get("iso_week")
-    if not iso_week:
-        return {"error": "iso_week is required"}
-
-    template_preference, preference_error = _parse_template_preference(
-        input_data.get("template_preference")
-    )
-    if preference_error is not None:
-        return {"error": preference_error}
-
-    week_start, week_error = _parse_iso_week_start(iso_week)
-    if week_error is not None:
-        return week_error
-
-    existing = store.load_week(slug, iso_week)
-    if existing is not None:
-        return {
-            "error": (
-                f"a week plan already exists for {iso_week!r}; use "
-                "propose_adaptation (and the /adapt skill) to change an "
-                "existing week instead"
-            )
-        }
-
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='athlete profile', exc_info=True)
-        return storage_error("athlete profile", exc)
-
-    try:
-        macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='macro plan', exc_info=True)
-        return storage_error("macro plan", exc)
-    if macro is None:
-        return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
-
-    try:
-        events = store.load_events(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='events', exc_info=True)
-        return storage_error("events", exc)
-    event = next((e for e in events if e.id == macro.event_id), None)
-    if event is None:
-        return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
-
-    event_format = event.event_format or "single_day"
-
-    # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
-    # (never derived from `target_metric` -- that describes units, not
-    # sport; see Event.primary_sport's own comment) -- threshold-history
-    # build, real audit finding: this call site previously passed neither
-    # at all, so creating the first week of a bike-primary macro silently
-    # generated a full swim week (pool placeholders, long-swim ladder)
-    # instead of real bike sessions.
-    primary_sport = event.primary_sport
-
-    try:
-        week = _generate_week_tolerant(
-            athlete,
-            macro,
-            iso_week,
-            week_start,
-            event_format,
-            template_preference,
-            event,
-            events=events,
-            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
-        )
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-    store.save_week(slug, week)
-
-    log.info("week plan created", athlete=slug, iso_week=iso_week)
-    return {
-        "created": True,
-        "iso_week": week.iso_week,
-        "meso_block": week.meso_block,
-        "focus": week.focus,
-        "target_volume_m": week.target_volume_m,
-        # Realism-guardrail verdict (Build A defect 1) -- surfaced, never
-        # silently clamped. Empty for a realistic week / any swim week.
-        "planning_warnings": list(week.planning_warnings),
-        "sessions": [
-            {
-                "date": s.date.isoformat(),
-                "sport": s.sport,
-                "source": s.source,
-                "distance_m": s.distance_m,
-                "duration_min": s.duration_min,
-                "purpose": s.purpose,
-            }
-            for s in week.sessions
-        ],
-    }
 
 
 def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
@@ -7002,7 +6106,7 @@ def _handle_reschedule_session(input_data: dict[str, Any], *, store: StoreInterf
     if week is None:
         return {
             "error": (
-                f"no existing week plan for {iso_week!r}; use create_week_plan if "
+                f"no existing week plan for {iso_week!r}; use author_week_plan if "
                 "it doesn't exist at all yet, or propose_adaptation if it needs a "
                 "volume/training-load change"
             )
@@ -7670,8 +6774,8 @@ def _events_for_check(store: StoreInterface, slug: str) -> list[Event]:
 def _dropped_sessions(existing_week, week) -> list[dict[str, Any]]:
     """Which of `existing_week`'s already-persisted sessions have no
     counterpart (same date+sport) anywhere in the freshly-generated `week`
-    -- defect-round (2026-09-12): `replace_week_plan` always regenerates
-    the whole week via `generate_week` (see that function's own docstring),
+    -- defect-round (2026-09-12): a regeneration always rebuilds
+    the whole week via `generate_week`,
     which has no memory of anything not part of its own deterministic
     output -- a hand-`add`-ed session, an earlier session_overrides content
     edit, a manually-placed race day. Before this, a routine single-session
@@ -7934,231 +7038,13 @@ _NO_DRAFT_WARNING = (
 )
 
 
-def _handle_replace_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
-    """Computes a candidate replacement week via `generate_week` (the same
-    engine function `create_week_plan` uses) for exactly the case
-    `create_week_plan` refuses -- a week already exists for iso_week. No
-    guard against an existing week: that's this tool's whole purpose, closing
-    the structural dead end where `create_week_plan` refuses AND
-    `propose_adaptation` also refuses (no valid prior week to adapt from).
-
-    Follows `replace_macro_plan`'s draft-then-confirm shape rather than
-    `create_week_plan`'s direct-persist one: overwriting an already-active
-    week can invalidate training the athlete has already done against it, so
-    `confirm=False` (default) only computes and returns the candidate + a
-    comparison against the week currently on file (if any), never calling
-    `store.save_week`; `confirm=True` recomputes identically (generate_week
-    is a pure function of its inputs, so this is safe to re-run) and
-    persists.
-
-    Optional `session_overrides` applies explicit distance_m/duration_min
-    overrides to specific sessions in the freshly-generated week, via
-    `_apply_session_overrides`, before the draft/comparison is built or
-    anything is persisted -- this is the tool's answer to the real dead end
-    where `generate_week`'s own ramp/volume math computes a technically-safe
-    number the athlete explicitly doesn't want (e.g. a conservative first
-    swim back after time off): there was previously no way to just set a
-    specific session's number, only to accept whatever the deterministic
-    math produced or replan the whole macro.
-
-    Optional `template_preference` (see `TEMPLATE_PREFERENCE_SCHEMA`) is
-    forwarded straight through to `generate_week`, same as `create_week_
-    plan` -- narrows which main-set library template the recomputed week's
-    pool-independent swim sessions use instead of the default blind
-    rotation.
-    """
-    iso_week = input_data.get("iso_week")
-    if not iso_week:
-        return {"error": "iso_week is required"}
-
-    template_preference, preference_error = _parse_template_preference(
-        input_data.get("template_preference")
-    )
-    if preference_error is not None:
-        return {"error": preference_error}
-
-    week_start, week_error = _parse_iso_week_start(iso_week)
-    if week_error is not None:
-        return week_error
-
-    confirm = bool(input_data.get("confirm", False))
-    if confirm:
-        agreed = _confirm_from_draft(store, slug, iso_week, input_data, tool="replace_week_plan")
-        if agreed is not None:
-            return agreed
-
-    try:
-        athlete = store.load_athlete(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='athlete profile', exc_info=True)
-        return storage_error("athlete profile", exc)
-
-    try:
-        macro = store.load_macro(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='macro plan', exc_info=True)
-        return storage_error("macro plan", exc)
-    if macro is None:
-        return {"error": "no macro plan for this athlete; use draft_macro_plan first"}
-
-    try:
-        events = store.load_events(slug)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='events', exc_info=True)
-        return storage_error("events", exc)
-    event = next((e for e in events if e.id == macro.event_id), None)
-    if event is None:
-        return {"error": f"macro's event_id {macro.event_id} not found in events.yaml"}
-
-    event_format = event.event_format or "single_day"
-
-    try:
-        existing_week = store.load_week(slug, iso_week)
-    except Exception as exc:  # noqa: BLE001
-        log.error("storage read failed", what='existing week plan', exc_info=True)
-        return storage_error("existing week plan", exc)
-
-    # `primary_sport`/`ftp_watts` read straight off `event.primary_sport`
-    # (never derived from `target_metric` -- see Event.primary_sport's own
-    # comment) -- threshold-history build, real audit finding: this call
-    # site previously passed neither at all, same bug as
-    # `_handle_create_week_plan` above.
-    primary_sport = event.primary_sport
-
-    try:
-        week = _generate_week_tolerant(
-            athlete,
-            macro,
-            iso_week,
-            week_start,
-            event_format,
-            template_preference,
-            event,
-            events=events,
-            **_week_generation_kwargs(athlete, store, slug, week_start, primary_sport),
-        )
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-    # Warnings the GENERATOR added beyond the realism check (e.g. "template yielded
-    # to a taper week", "volume held under a swim macro"): the realism re-run below
-    # replaces `planning_warnings`, so carry these through instead of losing them.
-    _generator_realism = _safe_realism(week.sessions) if (primary_sport == "bike" or athlete.weekly_template) else []
-    generator_notes = [w for w in week.planning_warnings if w not in _generator_realism]
-
-    session_overrides = input_data.get("session_overrides")
-    override_notes: list[str] = []
-    not_applied: list[dict[str, Any]] = []
-    if session_overrides:
-        override_error, override_notes = _apply_overrides_tolerant(week, session_overrides, athlete, not_applied)
-        if override_error is not None:
-            return {"error": override_error}
-
-    # Re-run the realism guardrail (Build A defect 1) AFTER any
-    # session_overrides append (defect 3) -- appending a 6th hard bike day
-    # should still get flagged. Also feeds in the prior week's bike volume
-    # (loaded above as `existing_week`) so the +8%/week rail is checked.
-    if primary_sport == "bike" or athlete.weekly_template:
-        prev_bike_min: float | None = None
-        if existing_week is not None:
-            prev_bike_min = sum(
-                s.duration_min
-                for s in existing_week.sessions
-                if counts_toward_bike_ramp(s)
-            )
-        week.planning_warnings = _safe_realism(
-            week.sessions, prev_week_bike_volume_min=prev_bike_min
-        ) + generator_notes
-    else:
-        week.planning_warnings = list(week.planning_warnings)
-    # Build E: fold in any non-fatal session_overrides notes (e.g. a
-    # `remove` that emptied the week's only hard bike day) regardless of
-    # primary_sport -- `evaluate_week_realism` above is bike-only, but a
-    # `remove` note isn't.
-    if override_notes:
-        week.planning_warnings = list(week.planning_warnings) + override_notes
-
-    comparison = None
-    if existing_week is not None:
-        comparison = {
-            "old_target_volume_m": existing_week.target_volume_m,
-            "old_session_count": len(existing_week.sessions),
-            "new_target_volume_m": week.target_volume_m,
-            "new_session_count": len(week.sessions),
-        }
-
-    # Defect-round (2026-09-12): loud, impossible-to-miss guardrail for the
-    # real near-miss this session -- a routine single-session edit that
-    # silently dropped a race day. `comparison`'s counts alone don't catch
-    # a same-count content swap; this names exactly which sessions
-    # wouldn't survive, in BOTH the structured `dropped_sessions` field and
-    # `planning_warnings` (so it surfaces wherever warnings already render,
-    # draft or confirmed) -- flags, never blocks, same posture as
-    # `evaluate_week_realism`.
-    dropped = _dropped_sessions(existing_week, week)
-    if dropped:
-        summary = ", ".join(f"{d['date']} {d['sport']}" for d in dropped)
-        week.planning_warnings = list(week.planning_warnings) + [
-            f"{len(dropped)} already-persisted session(s) would be DROPPED by this "
-            f"replacement (not part of generate_week's own fresh output, and this "
-            f"tool regenerates the whole week -- session_overrides only edits what "
-            f"survives regeneration): {summary}. Review before confirming, or "
-            "re-add them via session_overrides' add mode after this replacement."
-        ]
-
-    if not confirm:
-        draft_id = _hold_draft(store, slug, week, tool="replace_week_plan")
-        draft_response: dict[str, Any] = {
-            "iso_week": week.iso_week,
-            "meso_block": week.meso_block,
-            "focus": week.focus,
-            "target_volume_m": week.target_volume_m,
-            "planning_warnings": list(week.planning_warnings),
-            "sessions": _week_sessions_json(week),
-            "comparison": comparison,
-            "dropped_sessions": dropped,
-            "persisted": False,
-        }
-        if not_applied:
-            draft_response["not_applied"] = not_applied
-        if draft_id:
-            draft_response["draft_id"] = draft_id
-            draft_response["next"] = (
-                "Nothing is written yet. Show this to the athlete; when they agree, call again with "
-                "`confirm: true` and this draft_id -- that writes EXACTLY this plan, not a new one."
-            )
-        return draft_response
-
-    week.planning_warnings = list(week.planning_warnings) + [_NO_DRAFT_WARNING]
-    store.save_week(slug, week)
-
-    log.info("week plan replaced", athlete=slug, iso_week=iso_week, dropped_sessions=len(dropped))
-    return {
-        "iso_week": week.iso_week,
-        "meso_block": week.meso_block,
-        "focus": week.focus,
-        "target_volume_m": week.target_volume_m,
-        "planning_warnings": list(week.planning_warnings),
-        "sessions": _week_sessions_json(week),
-        "comparison": comparison,
-        "dropped_sessions": dropped,
-        "persisted": True,
-        **({"not_applied": not_applied} if not_applied else {}),
-    }
-
-
 def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface, slug: str) -> dict[str, Any]:
     """Targeted single/few-session edit to an ALREADY-PERSISTED week --
-    the fix for the real, confirmed bug in `replace_week_plan` (feedback
-    entry bf699e7f-1905-476c-ab1b-ae1db37077ca, athlete andrew, live
-    2026-W38): `replace_week_plan` ALWAYS calls `generate_week` first -- a
-    full, fresh regeneration from the deterministic engine's generic rule
-    table -- with zero awareness of
-    what's currently persisted for that week, so a routine single-session
-    edit can silently replace already-confirmed, bespoke session content
-    with generic defaults unless `session_overrides` happens to re-specify
-    every other already-correct day too, every single call. This tool
-    instead operates directly on `store.load_week`'s own result -- there is
+    the fix for a real, confirmed bug (feedback entry
+    bf699e7f-1905-476c-ab1b-ae1db37077ca, athlete andrew, live 2026-W38) in
+    the retired `replace_week_plan`, which regenerated the whole week and
+    could silently replace already-confirmed, bespoke session content with
+    generic defaults. This tool operates directly on `store.load_week`'s own result -- there is
     NO `generate_week` call anywhere in this path -- so every session NOT
     named in `session_overrides` is left byte-for-byte exactly as it was
     already persisted, guaranteed by construction (there is nothing else
@@ -8167,12 +7053,9 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
 
     Reuses `_apply_session_overrides`'s existing match(modify)/add/remove
     semantics verbatim -- same `SESSION_OVERRIDES_SCHEMA`, same date(+sport)
-    matching, same ambiguity/error handling `replace_week_plan` already has
-    -- only WHAT it's applied to changes: the real persisted week, not a
-    `generate_week` throwaway that gets thrown away again if the confirm
-    step is never reached.
+    matching, same ambiguity/error handling -- applied to the real persisted week.
 
-    Draft-then-confirm, matching `replace_week_plan`'s own shape: `confirm`
+    Draft-then-confirm: `confirm`
     defaults to False, returning only the candidate patched week (plus
     `planning_warnings`) as JSON with `"persisted": false` -- it does NOT
     call `store.save_week`. `confirm=True` recomputes identically (given
@@ -8188,7 +7071,7 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     `prev_week_bike_volume_min` -- so a patch that pushes this week's own
     bike volume up more than the +8%/week rail, or that (via `add` mode)
     appends a hard bike day past the realistic ceiling, still gets flagged,
-    never silently clamped -- same posture `replace_week_plan` already has.
+    never silently clamped.
     """
     iso_week = input_data.get("iso_week")
     if not iso_week:
@@ -8209,8 +7092,8 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
             "error": (
                 "session_overrides is required and must contain at least one "
                 "entry -- patch_week_plan only ever changes the session(s) "
-                "named there; use replace_week_plan if the whole week needs "
-                "regenerating instead."
+                "named there; use author_week_plan if the whole week needs "
+                "rewriting instead."
             )
         }
 
@@ -8230,9 +7113,9 @@ def _handle_patch_week_plan(input_data: dict[str, Any], *, store: StoreInterface
     if week is None:
         return {
             "error": (
-                f"no existing week plan for {iso_week!r} -- use create_week_plan "
-                "if it doesn't exist at all yet, or replace_week_plan if the "
-                "whole week needs to be regenerated from scratch"
+                f"no existing week plan for {iso_week!r} -- use author_week_plan "
+                "if it doesn't exist at all yet, or if the "
+                "whole week needs to be rewritten from scratch"
             )
         }
 
@@ -8412,18 +7295,14 @@ def _generate_candidate_week_for_merge(
 ) -> tuple[list[Session] | None, str | None]:
     """The `generate_week`-regeneration path for `merge_week_plan`'s
     `proposed_plan` (used whenever `proposed_sessions` is NOT supplied) --
-    same macro/event lookup and `generate_week` call `replace_week_plan`
-    makes for its own candidate, kept as a separate, deliberately-simple
-    function here (rather than sharing `replace_week_plan`'s inline code)
-    so this build doesn't risk that tool's own already-tested behavior
-    under time pressure. Returns `(sessions, error)`."""
+    macro/event lookup and `generate_week` call for its candidate. Returns `(sessions, error)`."""
     try:
         macro = store.load_macro(slug)
     except Exception as exc:  # noqa: BLE001
         log.error("storage read failed", what='macro plan', exc_info=True)
         return None, storage_problem_text("macro plan")
     if macro is None:
-        return None, "no macro plan for this athlete; use draft_macro_plan first"
+        return None, "no macro plan for this athlete; use author_macro_plan first"
 
     try:
         events = store.load_events(slug)
@@ -8601,8 +7480,7 @@ def _handle_merge_week_plan(
     `swim_coach.fueling.build_pre_event_nutrition_session`'s output, or one
     coach-authored session, becomes a proposed plan that only differs from
     current in that one slot) OR, if `proposed_sessions` is omitted, a
-    fresh `generate_week` regeneration (same computation `replace_week_
-    plan` makes) -- for reconciling a stale/regenerated week against
+    fresh `generate_week` regeneration -- for reconciling a stale/regenerated week against
     whatever bespoke content is already live. Purely informational: this
     mode never persists and needs no `confirm`.
 
@@ -8653,7 +7531,7 @@ def _handle_merge_week_plan(
             "error": (
                 f"no existing week plan for {iso_week!r} -- merge_week_plan compares "
                 "a proposed change against an already-persisted week, so there is "
-                "nothing to diff against yet; use create_week_plan first"
+                "nothing to diff against yet; use author_week_plan first"
             )
         }
 
@@ -8807,7 +7685,7 @@ def _handle_propose_session_adjustment(
     """Scales one already-planned `Session`'s volume/intensity up or down via
     `swim_coach.plan.adjust_session`, applied to a `session.model_copy(deep=
     True)` so the week on file is never touched until `confirm=True` --
-    same draft-then-confirm shape as `_handle_replace_week_plan`. Target
+    same draft-then-confirm shape as `_handle_patch_week_plan`. Target
     matching (`iso_week` + `date` + optional `sport`) reuses `_handle_
     reschedule_session`'s exact convention and error-message style.
 
@@ -8885,7 +7763,7 @@ def _handle_propose_session_adjustment(
     if week is None:
         return {
             "error": (
-                f"no existing week plan for {iso_week!r}; use create_week_plan if "
+                f"no existing week plan for {iso_week!r}; use author_week_plan if "
                 "it doesn't exist at all yet, or propose_adaptation if it needs a "
                 "volume/training-load change"
             )
@@ -9732,7 +8610,7 @@ def _macro_weeks_json(
 def _hold_author_macro_draft(
     store: StoreInterface, slug: str, athlete: Athlete, macro: MacroPlan, report, *, tool: str
 ) -> str | None:
-    """Same carrier convention `_hold_macro_draft` above already uses (a
+    """Same carrier convention as `_MACRO_CARRIER_WEEK` above (a
     `MacroPlan` riding inside a sentinel-`iso_week` `WeekPlan`'s
     `adaptation_rationale` JSON) -- but with the `check_macro` report riding
     alongside it, so `confirm` can require a fix/keep_as_is decision for
@@ -9938,7 +8816,7 @@ def _confirm_author_macro_plan(
 
     envelope = json.loads(carrier.adaptation_rationale or "{}")
     if "macro" not in envelope:
-        return None  # a different macro-drafting tool's carrier (e.g. replace_macro_plan) -- not ours
+        return None  # a different macro-drafting tool's carrier -- not ours
     macro = MacroPlan.model_validate(envelope["macro"])
     findings = envelope.get("report", {}).get("findings", [])
     findings_by_id = {f["id"]: f for f in findings}
@@ -10623,28 +9501,13 @@ def build_tool_handlers(
         "create_event": lambda input_data: _handle_create_event(
             input_data, store=store, slug=slug
         ),
-        "draft_macro_plan": lambda input_data: _handle_draft_macro_plan(
-            input_data, store=store, slug=slug
-        ),
-        "replace_macro_plan": lambda input_data: _handle_replace_macro_plan(
-            input_data, store=store, slug=slug
-        ),
-        "draft_season_macro_plan": lambda input_data: _handle_draft_season_macro_plan(
-            input_data, store=store, slug=slug
-        ),
         "compute_fueling_plan": lambda input_data: _handle_compute_fueling_plan(
             input_data, store=store, slug=slug
         ),
         "set_pool_coach_status": lambda input_data: _handle_set_pool_coach_status(
             input_data, store=store, slug=slug
         ),
-        "create_week_plan": lambda input_data: _handle_create_week_plan(
-            input_data, store=store, slug=slug
-        ),
         "reschedule_session": lambda input_data: _handle_reschedule_session(
-            input_data, store=store, slug=slug
-        ),
-        "replace_week_plan": lambda input_data: _handle_replace_week_plan(
             input_data, store=store, slug=slug
         ),
         "patch_week_plan": lambda input_data: _handle_patch_week_plan(

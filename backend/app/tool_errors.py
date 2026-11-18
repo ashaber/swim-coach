@@ -12,9 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 _WEEK_TOOLS = frozenset(
-    {"replace_week_plan", "patch_week_plan", "merge_week_plan", "create_week_plan", "propose_session_adjustment"}
+    {"patch_week_plan", "merge_week_plan", "propose_session_adjustment"}
 )
-_MACRO_TOOLS = frozenset({"replace_macro_plan", "draft_macro_plan", "draft_season_macro_plan"})
 
 _NO_EXCUSES = (
     "Never tell the athlete the plan cannot be written or blame the tools in general: say plainly what "
@@ -29,12 +28,6 @@ def _guidance(tool: str) -> str:
             "`structure` (plain text) and NO `structured`, or split it into smaller overrides. If it still "
             "fails, tell the athlete exactly what could not be saved, keep their request with "
             "save_athlete_note, and carry on with the rest of the plan. " + _NO_EXCUSES
-        )
-    if tool in _MACRO_TOOLS:
-        return (
-            "Do not retry this exact call. Try once more with simpler input (fewer events, an explicit "
-            "start_date); if it still fails, tell the athlete which part could not be built and continue "
-            "with the weeks you can write. " + _NO_EXCUSES
         )
     return (
         "Do not retry this exact call. Continue with what you can do, tell the athlete plainly what could "

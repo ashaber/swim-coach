@@ -1,0 +1,21 @@
+schema_version: 1
+file: 49-plan-projection.md
+added: '2026-11-14'
+cards:
+- section: scope-of-the-projection-coach-judgment
+  heading: Scope of the projection (`Coach judgment:`)
+  summary: A projection reports load, freshness and plan-check findings only. It never claims watts, pace or race-result gains.
+  recommendation: Present projections as load and freshness comparisons and say they do not predict performance.
+  content_hash: ec16d4898f9a6c96df55745d57da44531daedb20e5339d6c804d30e05a8265ca
+- section: defaults-for-a-scenario-week-coach-judgment
+  heading: Defaults for a scenario week (`Coach judgment:`)
+  summary: Recovery weeks cut hours 30% by default, the long session sits on Sunday, and hard sessions are spaced as far apart
+    as the days allow.
+  recommendation: Use these only as stated defaults for what-if scenarios; say they are unreviewed judgment.
+  content_hash: bf7cbe2c20387323b65c51ad903ad229b5e942afb5261efae7528ce0c2d1574b
+- section: easy-and-hard-load-per-hour-coach-judgment
+  heading: Easy and hard load per hour (`Coach judgment:`)
+  summary: Logged workouts at RPE 7 or more count as hard for the easy/hard load split, which needs 3 per bucket or falls
+    back to the blended rate.
+  recommendation: Say when a projection used the blended load per hour because RPE logging was too sparse to split.
+  content_hash: a9ba64850ec2f54aa4ad40da7374f8a0ad25d6ba4ea57f86c59add4efc0a057f

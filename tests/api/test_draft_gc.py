@@ -6,6 +6,8 @@ an unrelated write (reschedule_session) never touches a fresh pending draft."""
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from swim_coach.store import FileStore
 
 from app.drafts import MACRO_CARRIER_WEEK
@@ -21,11 +23,13 @@ def _h(athletes_dir):
 
 def test_confirming_a_week_draft_leaves_zero_draft_rows_for_that_week(athletes_dir) -> None:
     store, h = _h(athletes_dir)
-    draft = h["replace_week_plan"]({"iso_week": "2026-W28"})
+    draft = h["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": [
+        {"date": "2026-07-06", "sport": "swim_pool", "purpose": "agreed: easy spin"},
+    ]})
     assert draft["persisted"] is False
     assert store.load_week_draft("renee", "2026-W28") is not None  # held, pre-confirm
 
-    done = h["replace_week_plan"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
+    done = h["patch_week_plan"]({"iso_week": "2026-W28", "confirm": True, "draft_id": draft["draft_id"]})
 
     assert done["persisted"] is True and done["written_from_draft"] is True
     assert store.load_week_draft("renee", "2026-W28") is None
@@ -36,11 +40,23 @@ def test_confirming_a_week_draft_leaves_zero_draft_rows_for_that_week(athletes_d
 def test_confirming_a_macro_draft_leaves_zero_draft_rows_for_the_macro_carrier(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
-    draft = h["replace_macro_plan"]({"event_name": GREECE, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"})
+    start = date(2026, 7, 6)
+    weeks = [
+        {"week_start": (start + timedelta(weeks=i)).isoformat(), "phase": "Base", "focus": "aerobic base",
+         "hours": 8.0 + i, "load_tss": 400.0 + i * 20, "ctl_target": 40.0 + i * 2,
+         "key_sessions": [], "recovery": False, "notes": None}
+        for i in range(3)
+    ]
+    draft = h["author_macro_plan"]({"event_names": [GREECE], "weeks": weeks, "architecture": "Base toward Greece."})
     assert draft["persisted"] is False
     assert store.load_week_draft("renee", MACRO_CARRIER_WEEK) is not None  # held, pre-confirm
 
-    done = h["replace_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"]})
+    decisions = [
+        {"id": f["id"], "decision": "keep_as_is", "reason": "ok",
+         **({"athlete_words": "fine"} if f["severity"] == "high" else {})}
+        for f in draft["report"]["findings"]
+    ]
+    done = h["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": decisions})
 
     assert done["persisted"] is True and done["written_from_draft"] is True
     assert store.load_week_draft("renee", MACRO_CARRIER_WEEK) is None

@@ -415,7 +415,7 @@ def test_ask_question_unknown_workout_id_is_404(client, fake_claude_chat_factory
 #
 # Links a question to a PLANNED Session by (date, sport) instead of a
 # Workout id -- mutually exclusive with workout_id (Feedback.session_date's
-# docstring: a raw session_id would silently orphan on `replace_week_plan`).
+# docstring: a raw session_id would silently orphan when a week is regenerated).
 
 
 def test_ask_question_session_linkage_creates_feedback_row(

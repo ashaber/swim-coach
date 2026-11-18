@@ -2,12 +2,12 @@
 recomputation (Andrew, 2026-09-21). Week tools: merge_week_plan,
 propose_session_adjustment, author_week_plan (engine/plan-check-red-team PR
 2 -- propose_adaptation itself is advisory-only now, no longer a writable
-draft; see test_tools.py's author_week_plan coverage). Macro tools:
-replace_macro_plan, author_macro_plan."""
+draft; see test_tools.py's author_week_plan coverage). Macro tool:
+author_macro_plan."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from swim_coach.store import FileStore
 
@@ -119,13 +119,12 @@ def test_merge_never_picks_up_another_tools_draft(athletes_dir) -> None:
     assert next(s for s in store.load_week("renee", "2026-W28").sessions if s.date == date(2026, 7, 8)).duration_min != 10
 
 
-# --- propose_adaptation (written via replace_week_plan + draft_id) ----------------------------
+# --- propose_adaptation (advisory only) --------------------------------------------------------
 
 
 def test_propose_adaptation_is_advisory_only_and_points_at_author_week_plan(athletes_dir) -> None:
     # engine/plan-check-red-team PR 2: propose_adaptation no longer holds a
-    # writable draft (its old write path, replace_week_plan, is retired from
-    # TOOLS_SCHEMA) -- it returns numbers for the coach to feed into
+    # writable draft -- it returns numbers for the coach to feed into
     # author_week_plan, which is where "write exactly the agreed draft" now
     # lives for a week's sessions (see test_tools.py's own
     # test_author_week_plan_draft_then_confirm_persists for that coverage).
@@ -136,43 +135,74 @@ def test_propose_adaptation_is_advisory_only_and_points_at_author_week_plan(athl
     assert "author_week_plan" in draft["next"]
 
 
-# --- replace_macro_plan -----------------------------------------------------------------------
+# --- author_macro_plan ------------------------------------------------------------------------
 
 
-MACRO = {"event_name": GREECE, "current_weekly_volume_m": 18000, "start_date": "2026-01-05"}
+def _macro_weeks(start: date, n: int = 3, hours: float = 8.0) -> list[dict]:
+    return [
+        {
+            "week_start": (start + timedelta(weeks=i)).isoformat(),
+            "phase": "Base" if i == 0 else "Build",
+            "focus": "aerobic base" if i == 0 else "race-specific build",
+            "hours": hours + i,
+            "load_tss": 400.0 + i * 20,
+            "ctl_target": 40.0 + i * 2,
+            "key_sessions": ["Tue: over/unders 3x8min"],
+            "recovery": False,
+            "notes": None,
+        }
+        for i in range(n)
+    ]
+
+
+MACRO = {"event_names": [GREECE], "weeks": _macro_weeks(date(2026, 7, 6)), "architecture": "Base then build toward Greece."}
+
+
+def _decisions(draft: dict) -> list[dict]:
+    return [
+        {
+            "id": f["id"], "decision": "keep_as_is", "reason": "acceptable for now",
+            **({"athlete_words": "fine with this"} if f["severity"] == "high" else {}),
+        }
+        for f in draft["report"]["findings"]
+    ]
+
+
+def _macro_hours(macro) -> list[float]:
+    return [w.hours for w in macro.weeks]
 
 
 def test_macro_confirm_writes_exactly_the_agreed_macro(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
-    draft = h["replace_macro_plan"](MACRO)
+    draft = h["author_macro_plan"](MACRO)
     assert draft["persisted"] is False and draft["draft_id"]
     assert store.load_macro("renee") is None
 
-    # confirm re-sends a very different volume by mistake
-    done = h["replace_macro_plan"]({**MACRO, "current_weekly_volume_m": 5000, "confirm": True, "draft_id": draft["draft_id"]})
+    # confirm re-sends a very different plan by mistake
+    done = h["author_macro_plan"]({
+        **{**MACRO, "weeks": _macro_weeks(date(2026, 7, 6), hours=2.0)},
+        "confirm": True, "draft_id": draft["draft_id"], "decisions": _decisions(draft),
+    })
 
     assert done["persisted"] is True and done["written_from_draft"] is True and done["verified"] is True
-    saved = store.load_macro("renee")
-    assert [b["weekly_volume_target_m"] for b in draft["blocks"]] == [b.weekly_volume_target_m for b in saved.blocks]
+    assert _macro_hours(store.load_macro("renee")) == [8.0, 9.0, 10.0]
 
 
 def test_macro_confirm_without_a_draft_id_writes_the_latest_macro_draft(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
-    draft = h["replace_macro_plan"](MACRO)
-    done = h["replace_macro_plan"]({**MACRO, "current_weekly_volume_m": 5000, "confirm": True})
+    draft = h["author_macro_plan"](MACRO)
+    done = h["author_macro_plan"]({"confirm": True, "decisions": _decisions(draft)})
     assert done["written_from_draft"] is True
-    assert [b["weekly_volume_target_m"] for b in draft["blocks"]] == [
-        b.weekly_volume_target_m for b in store.load_macro("renee").blocks
-    ]
+    assert _macro_hours(store.load_macro("renee")) == [8.0, 9.0, 10.0]
 
 
 def test_an_unknown_macro_draft_id_writes_nothing(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
-    h["replace_macro_plan"](MACRO)
-    result = h["replace_macro_plan"]({**MACRO, "confirm": True, "draft_id": "00000000-0000-0000-0000-000000000000"})
+    h["author_macro_plan"](MACRO)
+    result = h["author_macro_plan"]({**MACRO, "confirm": True, "draft_id": "00000000-0000-0000-0000-000000000000"})
     assert result["persisted"] is False and "draft" in result["error"].lower()
     assert store.load_macro("renee") is None
 
@@ -181,7 +211,7 @@ def test_macro_and_week_drafts_never_appear_as_weeks_or_macros(athletes_dir) -> 
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
     before = store.list_week_ids("renee")
-    h["replace_macro_plan"](MACRO)
+    h["author_macro_plan"](MACRO)
     assert store.list_week_ids("renee") == before and store.load_macro("renee") is None
 
 
@@ -205,16 +235,16 @@ def test_merge_confirm_needs_only_the_draft_id(athletes_dir) -> None:
     assert done["persisted"] is True and done["written_from_draft"] is True
 
 
-def test_replace_macro_confirm_needs_only_the_draft_id(athletes_dir) -> None:
+def test_author_macro_confirm_needs_only_the_draft_id_and_decisions(athletes_dir) -> None:
     (athletes_dir / "renee" / "plan" / "macro.yaml").unlink()
     store, h = _h(athletes_dir)
-    draft = h["replace_macro_plan"](MACRO)
-    done = h["replace_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"]})
+    draft = h["author_macro_plan"](MACRO)
+    done = h["author_macro_plan"]({"confirm": True, "draft_id": draft["draft_id"], "decisions": _decisions(draft)})
     assert done["persisted"] is True and done["written_from_draft"] is True
     assert store.load_macro("renee") is not None
 
 
-def test_patch_and_replace_confirm_need_only_iso_week_and_the_draft_id(athletes_dir) -> None:
+def test_patch_confirm_needs_only_iso_week_and_the_draft_id(athletes_dir) -> None:
     store, h = _h(athletes_dir)
     t = next(s for s in store.load_week("renee", "2026-W28").sessions if s.date == date(2026, 7, 8))
     draft = h["patch_week_plan"]({"iso_week": "2026-W28", "session_overrides": [
