@@ -113,6 +113,7 @@ contained fabricated URLs and embedded agent-directive text.
   outcome"; Confidence: medium (small, elite, short, sprint-outcome — not
   directly transferable to an ultra-distance aerobic session, cited only
   for the principle). See `14-swim-set-structure.md`.
+- **⚠ Dekerle J. et al. (2010)** — "Critical swimming speed and critical stroke rate in intermittent aerobic exercise" (title as indexed) — *J Sci Med Sport*. Nine male swimmers, 10 x 400 m at critical speed with 40 s recovery kept lactate stable; abstract-level. Grounds `48`.
 
 ## Swimming — physiology & nutrition
 
@@ -1691,6 +1692,10 @@ All located and read (abstract minimum) 2026-10; no DOIs kept (see header). `[AD
 - **✓ Impellizzeri F.M., Marcora S.M. (2007)** — "The physiology of mountain biking" — *Sports Medicine, 37(1):59-71*. Grounds `42-ultra-mtb-endurance.md`.
 - **✓ Abou Shoak M. et al. (2013)** — "Participation and performance trends in ultracycling" — *Open Access Journal of Sports Medicine, 4:41-51*. Grounds `42-ultra-mtb-endurance.md`.
 - **✓ Podlogar T. et al. (2022)** — "Increased exogenous but unaltered endogenous carbohydrate oxidation with combined fructose-maltodextrin ingested at 120 g/h versus 90 g/h at different ratios" — *European Journal of Applied Physiology, 122(11):2393-2401*. ⚠ n=11, lab. Grounds `42-ultra-mtb-endurance.md`.
+- **⚠ Seiler K.S., Jøranson K., Olesen B.V., Hetlelid K.J. (2013)** — "Adaptations to aerobic interval training: interactive effects of exercise intensity and total work duration" — *Scand J Med Sci Sports*. 4 x 4, 4 x 8, 4 x 16 min in trained cyclists; outcomes read from a secondary summary. Grounds `48`.
+- **⚠ Baron B. et al. (2003)** — "Maximal lactate steady state does not correspond to a complete physiological steady state" — *Int J Sports Med*. Eight trained cyclists, 30 min at MLSS; abstract-level. Grounds `48`.
+- **⚠ Rønnestad B.R., Hansen J., Vegge G., Tønnessen E., Slettaløkken G. (2015)** and **Rønnestad B.R., Hansen J., Nygaard H., Lundby C. (2020)** — short (3 x 13 x 30 s/15 s) vs effort-matched long intervals in cyclists — *Scand J Med Sci Sports*; abstract-level. Grounds `48`.
+- **✓ Sylta Ø. et al. (2016)** — "The effect of different high-intensity periodization models on endurance adaptations" — *Med Sci Sports Exerc*. 63 cyclists, 12 weeks, no difference by interval-duration order at matched load. Grounds `48`.
 
 ## Recovery, sleep & HRV
 

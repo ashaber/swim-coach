@@ -51,3 +51,8 @@ cards:
     targets; treat a crash injury as the acute upper-limb pattern and gradual-onset pain as the overuse/knee
     pattern.
   content_hash: 34da6e13d19097d5784d6a433df7e10ea25b154e4390eed842266e913e7965d5
+- section: workout-compiler-explicit-reps-ranges
+  heading: 'Workout compiler: explicit-reps ranges'
+  summary: 'Explicit bike reps, rep length and rest compile exactly inside wide coach-judgment ranges (threshold 1-6 reps of 5-30 min); any change is recorded.'
+  recommendation: 'Tell the coach when a request was clamped and say the ranges are unvalidated coach judgment.'
+  content_hash: be2f21c2c8686274dec218e6bb7bee8dbb6a925c84a7d5b1543cea5e8af870d0

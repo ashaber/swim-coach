@@ -115,6 +115,14 @@ All pace numbers are read from `zones.py`'s `zone_table()` — this file
 supplies no independent pace math, only session-composition structure
 around that existing table.
 
+## Workout compiler: explicit-reps ranges
+
+`Coach judgment:` when the coach asks the workout compiler (`workout_builders/swim.py`) for a CSS set with explicit reps, rep distance or rest, it builds exactly that inside these ranges and records any change in its `adjustments`. Reps 1-40, rep distance 25-1600 m, rest 0-300 s, total 1000-10000 m for a pool session (500-30000 m open water). With no rest given a CSS set uses 20 s. The set is swum at Z3-Z5 (default Z4, CSS pace), in 1-10 sets with 0-900 s total set rest (default 60 s). No source fixes these numbers; they only stop a typo compiling into an impossible session.
+
+Confidence: low.
+
+Test: if coaches repeatedly ask for values the compiler clamps, widen the range; if the 20 s default rest is overridden in most requests, change the default.
+
 ## Open questions / not yet covered here
 
 - A ranked comparison of main-set formats (straight/descending/broken-

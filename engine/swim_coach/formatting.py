@@ -26,3 +26,10 @@ def iso_week_str(d: date) -> str:
     """ISO week label for a date, e.g. 2026-W07."""
     year, week, _ = d.isocalendar()
     return f"{year}-W{week:02d}"
+
+
+def format_amount(value: float | None, unit: str) -> str:
+    """A dose in its unit for prose: seconds as whole minutes, metres as whole metres, "unknown" for None."""
+    if value is None:
+        return "unknown"
+    return f"{value / 60:.0f} min" if unit == "s" else f"{value:.0f} m"

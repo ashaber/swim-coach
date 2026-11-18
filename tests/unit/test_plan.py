@@ -841,7 +841,7 @@ def test_bike_ftp_check_note_reaches_generate_week_end_to_end():
 
 
 def test_bike_ramp_test_structure_starts_with_warmup_then_ramp_role():
-    from swim_coach.plan import _bike_ramp_test_structure
+    from swim_coach.workout_builders.bike import _bike_ramp_test_structure
 
     structured = _bike_ramp_test_structure(None)
     assert structured.items[0].role == "warmup"
@@ -851,7 +851,7 @@ def test_bike_ramp_test_structure_starts_with_warmup_then_ramp_role():
 
 
 def test_bike_ramp_test_structure_no_current_ftp_uses_fixed_default_start():
-    from swim_coach.plan import (
+    from swim_coach.workout_builders.bike import (
         BIKE_RAMP_TEST_START_WATTS_DEFAULT,
         _bike_ramp_test_structure,
     )
@@ -862,7 +862,7 @@ def test_bike_ramp_test_structure_no_current_ftp_uses_fixed_default_start():
 
 
 def test_bike_ramp_test_structure_known_ftp_starts_at_half_ftp():
-    from swim_coach.plan import (
+    from swim_coach.workout_builders.bike import (
         BIKE_RAMP_TEST_START_FRACTION_OF_FTP,
         _bike_ramp_test_structure,
     )
@@ -873,7 +873,7 @@ def test_bike_ramp_test_structure_known_ftp_starts_at_half_ftp():
 
 
 def test_bike_ramp_test_structure_climbs_steadily_not_flat():
-    from swim_coach.plan import _bike_ramp_test_structure
+    from swim_coach.workout_builders.bike import _bike_ramp_test_structure
 
     structured = _bike_ramp_test_structure(250.0)
     ramp = structured.items[1]
@@ -886,7 +886,7 @@ def test_bike_ramp_test_structure_no_nonsensical_negative_or_zero_values():
     # time for every bike warm-up in this engine, not specific to the ramp
     # test) -- this test's own job is the RAMP step specifically, which
     # must always be a real, positive, genuinely climbing power range.
-    from swim_coach.plan import _bike_ramp_test_structure
+    from swim_coach.workout_builders.bike import _bike_ramp_test_structure
 
     for ftp in (None, 150.0, 300.0, 500.0):
         structured = _bike_ramp_test_structure(ftp)
@@ -903,7 +903,7 @@ def test_bike_ramp_test_structure_exports_valid_ramp_element():
     # real output, not just trusting a structure-level assertion.
     import xml.etree.ElementTree as ET
 
-    from swim_coach.plan import _bike_ramp_test_structure
+    from swim_coach.workout_builders.bike import _bike_ramp_test_structure
     from swim_coach.zwo_export import to_zwo_workout
 
     structured = _bike_ramp_test_structure(263.0)
@@ -924,7 +924,7 @@ def test_bike_ramp_test_structure_exports_valid_ramp_element():
 
 
 def test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power():
-    from swim_coach.plan import BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION, ftp_from_ramp_test
+    from swim_coach.workout_builders.bike import BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION, ftp_from_ramp_test
 
     assert BIKE_RAMP_TEST_FTP_FROM_BEST_1MIN_FRACTION == pytest.approx(0.75)
     # Matches roadmancycling.com's own worked example, direct-fetch
@@ -937,7 +937,7 @@ def test_ftp_from_ramp_test_applies_75_percent_of_best_1min_power():
 
 
 def test_bike_2x20_test_structure_shape_warmup_effort_recovery_effort_cooldown():
-    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import _bike_2x20_test_structure
 
     structured = _bike_2x20_test_structure(None)
     roles = [item.role for item in structured.items]
@@ -956,7 +956,7 @@ def test_bike_2x20_test_work_steps_never_carry_power_w_or_zone_target():
     # that defeats the entire point of testing (measuring the athlete's
     # real, unknown ceiling) and silently turns a test into an ordinary
     # training session (the real incident that motivated this build).
-    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import _bike_2x20_test_structure
 
     for ftp in (None, 200.0, 350.0):
         structured = _bike_2x20_test_structure(ftp)
@@ -970,7 +970,7 @@ def test_bike_2x20_test_work_steps_never_carry_power_w_or_zone_target():
 
 
 def test_bike_2x20_test_work_steps_are_real_20_minute_efforts():
-    from swim_coach.plan import BIKE_2X20_TEST_EFFORT_MIN, _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import BIKE_2X20_TEST_EFFORT_MIN, _bike_2x20_test_structure
 
     structured = _bike_2x20_test_structure(250.0)
     work_steps = [item for item in structured.items if item.role == "interval"]
@@ -981,7 +981,7 @@ def test_bike_2x20_test_work_steps_are_real_20_minute_efforts():
 
 
 def test_bike_2x20_test_has_a_real_recovery_interval_between_efforts():
-    from swim_coach.plan import BIKE_2X20_TEST_RECOVERY_MIN, _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import BIKE_2X20_TEST_RECOVERY_MIN, _bike_2x20_test_structure
 
     structured = _bike_2x20_test_structure(250.0)
     recovery = next(item for item in structured.items if item.role == "recovery")
@@ -997,7 +997,7 @@ def test_bike_2x20_test_has_a_real_recovery_interval_between_efforts():
 def test_bike_2x20_test_why_line_documents_pacing_not_target():
     # The trailing "Why:" line is real, athlete-facing pacing guidance
     # (a legitimate coaching cue), never a target power number.
-    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import _bike_2x20_test_structure
 
     structured = _bike_2x20_test_structure(250.0)
     why_step = structured.items[-1]
@@ -1013,7 +1013,7 @@ def test_bike_2x20_test_structure_exports_cleanly_via_zwo():
     # power number that was never actually prescribed.
     import xml.etree.ElementTree as ET
 
-    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import _bike_2x20_test_structure
     from swim_coach.zwo_export import to_zwo_workout
 
     structured = _bike_2x20_test_structure(263.0)
@@ -1029,7 +1029,7 @@ def test_bike_2x20_test_structure_exports_cleanly_via_zwo():
 def test_bike_2x20_test_structure_exports_cleanly_via_garmin_fit():
     # Same real end-to-end proof for the Garmin/.FIT export path.
     from swim_coach.garmin_export import to_garmin_fit_workout
-    from swim_coach.plan import _bike_2x20_test_structure
+    from swim_coach.workout_builders.bike import _bike_2x20_test_structure
 
     structured = _bike_2x20_test_structure(263.0)
     fit_bytes = to_garmin_fit_workout(structured, sport="bike", name="2x20 FTP Test")
@@ -1038,7 +1038,7 @@ def test_bike_2x20_test_structure_exports_cleanly_via_garmin_fit():
 
 
 def test_ftp_from_2x20_test_applies_95_percent_of_average_of_both_efforts():
-    from swim_coach.plan import BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION, ftp_from_2x20_test
+    from swim_coach.workout_builders.bike import BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION, ftp_from_2x20_test
 
     assert BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION == pytest.approx(0.95)
     # Worked example: two efforts averaging 300W and 280W -> mean 290W ->
@@ -1053,7 +1053,7 @@ def test_ftp_from_2x20_test_equal_efforts_matches_single_effort_convention():
     # well-established single-20-minute-effort convention
     # (BIKE_2X20_TEST_FTP_FROM_AVG_FRACTION applied directly) -- a sanity
     # check that averaging two equal readings doesn't distort the number.
-    from swim_coach.plan import ftp_from_2x20_test
+    from swim_coach.workout_builders.bike import ftp_from_2x20_test
 
     assert ftp_from_2x20_test(300.0, 300.0) == pytest.approx(300.0 * 0.95)
 
@@ -1070,7 +1070,7 @@ def test_bike_interval_template_low_volume_degrades_to_flat_block():
     # `_fit_units_with_flexible_gap`'s own degenerate-count path is real
     # defensive code for an input this build's own callers don't currently
     # produce.
-    from swim_coach.plan import (
+    from swim_coach.workout_builders.bike import (
         _bike_over_unders_main,
         _bike_short_short_main,
         _bike_sustained_threshold_main,

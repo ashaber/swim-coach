@@ -1,0 +1,78 @@
+schema_version: 1
+file: 48-stimulus-progression.md
+added: '2026-11-14'
+cards:
+- section: 1-what-a-stimulus-kind-is-coach-judgment
+  heading: 1. What a stimulus kind is (`Coach judgment:`)
+  summary: Kind comes from the highest zone with 10% of work; two quality zones at 30% make mixed; long needs the per-sport
+    floor or 85% of the recent longest. Races, openers and warm-ups are excluded.
+  recommendation: Describe a session by its computed kind and say the rule is coach judgment, not research.
+  content_hash: 8a69c794af47e008652f37553841a026ffcd6621e7d57a2b0a7555a684c19e26
+- section: 2-estimated-dose-when-only-a-zone-is-known-coach-judgment
+  heading: 2. Estimated dose when only a zone is known (`Coach judgment:`)
+  summary: With no structure, a Z3+ session is assumed half work and a Z1/Z2 session all work. Estimated doses never drive
+    a progress verdict.
+  recommendation: Treat estimated doses as rough and never progress an athlete from one.
+  content_hash: 3a39d5b536ad8a5e15c412d2963d8fddca748a73546d1e7425cca16477c3ded1
+- section: 3-progression-verdicts-coach-judgment
+  heading: 3. Progression verdicts (`Coach judgment:`)
+  summary: 'The latest usable session decides: progress at 90% completion, 70% in band, fade 5% or less, RPE under 9; reduce
+    under 75% completion or 50% in band; rebuild after 28 days.'
+  recommendation: Quote the verdict with its numbers and call the step sizes unvalidated coach judgment.
+  content_hash: 20c23e8a26c61fd6ebde7693b8acddaf592fa75495897dc7b53ef276f149a24c
+- section: 4-fallback-when-no-shape-is-derivable-rep-length-before-total-volume-coach-judgment
+  heading: '4. Fallback when no shape is derivable: rep length before total volume (`Coach judgment:`)'
+  summary: When a session has no regular shape and the longest rep is short for the kind, the dose read holds total work and
+    lengthens reps one step toward a per-sport target.
+  recommendation: Use this only when no shape can be derived; otherwise suggest lever candidates. Say the targets are untested
+    judgment.
+  content_hash: ad7420d20f3546907a7df82e87776d50c0cc2574778bf2af4e190ca87972684b
+- section: 5-recovery-response-coach-judgment
+  heading: 5. Recovery response (`Coach judgment:`)
+  summary: Wellness on the 1 to 2 days after a session is strained at HRV -5%, resting HR +5% or a red composite. Missing
+    data is unknown, never recovered.
+  recommendation: Report recovery as informational, name the missing data, and never let unknown recovery block progress.
+  content_hash: cff8a5c6f42f422cc30ee3ba8e5a4c203b7b584718a404338a067c4d5ac166df
+- section: 6-unplanned-work-and-the-rest-of-the-week-coach-judgment
+  heading: 6. Unplanned work and the rest of the week (`Coach judgment:`)
+  summary: Unplanned work flags a remaining session when it duplicated the stimulus at 75%, sits under 48 hours after hard
+    work, or pushes week load past the 8% rail.
+  recommendation: Tell the athlete which remaining session is affected and why; suggest, never reschedule.
+  content_hash: 792827a91b5456553c46594567a5612ed1dced8c1dec6338965a2e86e7e4af2d
+- section: 7-guardrail-findings-coach-judgment
+  heading: 7. Guardrail findings (`Coach judgment:`)
+  summary: 'Week checks judge a planned session by lever moves: several levers, oversized step, past the ceiling, ignored threshold rise, no retest, or a first harder-zone session.'
+  recommendation: Quote both rungs and the lever changes, offer the candidates, say these are untested coach judgment, and
+    keep the plan only with a stated reason.
+  content_hash: f70ec0ddd1101852dca10a32f6c1f10461882b511c2f0b94373c30ce4aa7255b
+- section: 8-calibration-against-real-execution-data-coach-judgment
+  heading: 8. Calibration against real execution data (`Coach judgment:`)
+  summary: Substituted kinds get no completion, endurance uses whole aerobic time, only shaped unsubstituted sessions are read (others listed as also delivered), doses round to practical units.
+  recommendation: Say these calibration rules are untested coach judgment and quote the floors and units used.
+  content_hash: 64c5252da400db9993398d40c759af279618517018ed07bdb0334e0936e43dc3
+- section: 9-the-lever-model-coach-judgment
+  heading: 9. The lever model (`Coach judgment:`)
+  summary: A dominant block of 75% of the work sets the shape; progression moves one lever one step from the last clean session, from entry shapes. No study compares the levers.
+  recommendation: Propose one lever change at a time in rung notation, say lever order and steps are coach judgment, and never
+    name a fixed workout list.
+  content_hash: a2caa4019e835a093cd1facefc9b3e436d292382a46e8a89e8628461789a517b
+- section: 10-ceilings-per-session-work-in-the-zone
+  heading: '10. Ceilings: per-session work in the zone'
+  summary: Per-session work ceilings come from tested cycling protocols (32 min threshold, 30 min at MLSS, 3 x 13 x 30/15
+    VO2) and one swim study; the rest is coach judgment.
+  recommendation: Quote the ceiling with its source and confidence; at the top, suggest a threshold test or the harder zone's
+    entry instead of more volume.
+  content_hash: 8cb5d2687756805d9511f1fbe2fdb9b78e02bfc0ba7e599a151dd2141149241f
+- section: 11-a-threshold-change-restarts-the-climb-coach-judgment
+  heading: 11. A threshold change restarts the climb (`Coach judgment:`)
+  summary: When FTP or CSS rises 2% or 1.5%, the reference session steps down levers, never below the entry shape, and the
+    restart shape becomes the first candidate.
+  recommendation: Tell the athlete the threshold rose and the next sessions restart lower so they will not fail; call the
+    step count coach judgment.
+  content_hash: f4663d07587cb0e592a48ab013839c29604238af290d0920576f74828f5394f0
+- section: research-needed
+  heading: Research needed
+  summary: 'Lists four gaps: how interval levers compare as progression steps and their rates, recovery thresholds, the hard-recovery
+    window in masters athletes, and swim pace-zone reliability.'
+  recommendation: State plainly that no evidence backs the lever order or step sizes and treat them as defaults to test.
+  content_hash: 39f2bd31f536146ad084b13c4d9d476e2b69c2d70e7d5468c1bc22b511a3142d

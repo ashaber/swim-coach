@@ -47,3 +47,8 @@ cards:
     calibrated to this athlete's own data, and whether rep length should also vary by macro block is unevidenced.
   recommendation: none -- background only
   content_hash: 817d5cdcc64ef35476ba621fb2aabe1e81dccf2b37bd7fabaa4f5ccb109ea14f
+- section: workout-compiler-explicit-reps-ranges
+  heading: 'Workout compiler: explicit-reps ranges'
+  summary: 'Explicit CSS sets compile inside wide coach-judgment ranges (reps 1-40, 25-1600 m, rest 0-300 s, default 20 s); any change is recorded.'
+  recommendation: 'Tell the coach when a request was clamped and say the ranges are unvalidated coach judgment.'
+  content_hash: 53e85d6a2cd7969d1576df1e361e6fa62a68287feceab6ba26bc47d1e89c88da

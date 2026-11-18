@@ -274,3 +274,11 @@ Medicine - Open Journal*,
 potentially-predatory publisher — same category as `reference_list.md`'s
 already-demoted Smith & Thomas/Hilaris entry. Not cited above; recorded so
 a future pass doesn't re-verify and reintroduce it unknowingly.
+
+## Workout compiler: explicit-reps ranges
+
+`Coach judgment:` when the coach asks the workout compiler (`workout_builders/bike.py`) for explicit reps, rep length or rest, it builds exactly that inside these ranges and records any change in its `adjustments`. They are wider than the auto-fit ranges in `24-cycling-periodization-intervals.md` (2-3 threshold reps, 3-5 race-pace reps, 1-2 short-short sets) and only stop a typo compiling into an unrideable session. Threshold: 1-6 reps of 5-30 min, Z3-Z5. Race-pace: 1-10 reps of 1-5 min. Over/unders: 1-6 blocks of 1-6 cycles, 30-300 s per over and under. Short-short: 1-4 sets of 4-20 reps, 10-90 s on, 5-90 s off. Openers: 1-6 ramps. Rest 30-900 s (openers 60-600 s). Session 10-1440 min. No source fixes these numbers. The zone-neutral `steady_intervals` builder (the canonical rung builder) takes 1-10 sets of 1-60 reps, 10-3600 s work (short on/off VO2 included), rest 0-900 s and set rest 0-1800 s at Z3-Z5; default rest is the work time capped at 4 min, default set rest 4 min.
+
+Confidence: low.
+
+Test: if coaches keep asking for shapes the compiler clamps (see `adjustments`), widen the range; if clamped asks never occur, tighten it.
