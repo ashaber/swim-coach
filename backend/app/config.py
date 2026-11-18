@@ -155,6 +155,11 @@ class Settings:
     # COACH_ROUTER_CAPTURE_ATHLETES: slugs whose Haiku reply (and question + Sonnet reply) is stored
     # in router_shadow_captures for human comparison. Empty = nothing stored. Never logged.
     router_capture_athletes: frozenset[str] = frozenset()
+    # PROGRESSION_TOOLS_ENABLED. When True the coach gets `get_progression`, `rung`/`archetype` on session
+    # entries (the engine compiles the workout) and progression findings in the week check
+    # (app.progression_tools). Default OFF: it adds to the cached tool prefix and changes what the coach
+    # sees on every plan turn; with it off the tool schema and every tool result are unchanged.
+    progression_tools_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -282,6 +287,8 @@ class Settings:
             router_mode=router_mode,
             router_model=router_model,
             router_capture_athletes=router_capture_athletes,
+            progression_tools_enabled=os.environ.get("PROGRESSION_TOOLS_ENABLED", "").strip().lower()
+            in ("1", "true", "yes", "on"),
         )
 
     def token_matches(self, provided_token: str) -> bool:
