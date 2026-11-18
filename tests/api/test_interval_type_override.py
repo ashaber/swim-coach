@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 
+from fakes import seed_generated_week
 from swim_coach.models import Event
 from swim_coach.plan import scaffold_macro
 from swim_coach.store import FileStore
@@ -41,7 +42,7 @@ def _setup(athletes_dir):
     h["set_weekly_template"]({"template": TEMPLATE, "confirm": True})
     ws = next(b for b in macro.blocks if b.name in ("build", "peak", "base")).start_date + timedelta(weeks=1)
     iso = _iso(ws)
-    h["create_week_plan"]({"iso_week": iso})
+    seed_generated_week(store, "renee", iso)
     return store, h, iso, ws
 
 

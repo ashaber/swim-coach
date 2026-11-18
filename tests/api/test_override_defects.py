@@ -76,28 +76,3 @@ def test_structure_without_distance_is_not_required_for_non_swim_sessions() -> N
     )
     assert err is None and notes == []
 
-
-def test_replace_week_plan_keeps_the_generators_own_warnings(athletes_dir) -> None:
-    # A template week under a swim macro carries a 'volume held' warning from the
-    # generator; the realism re-run in replace_week_plan must not throw it away.
-    from datetime import timedelta
-    from swim_coach.models import Event
-    from swim_coach.plan import scaffold_macro
-
-    store = FileStore(base_dir=athletes_dir)
-    h = build_tool_handlers(store, slug="renee", expert_mode=False)
-    h["update_athlete_profile"]({"sports": ["bike", "swim_pool"], "ftp_watts": 250.0})
-    athlete = store.load_athlete("renee")
-    start = date.today() - timedelta(days=date.today().weekday()) - timedelta(weeks=1)
-    event = Event(id=uuid.uuid4(), athlete_id=athlete.id, name="Halloween swim", event_date=start + timedelta(weeks=24),
-                  distance_m=20000, water_temp_c=18.0, wetsuit=False, priority="A")
-    macro = scaffold_macro(athlete, event, start, current_weekly_volume_m=8000, peak_weekly_volume_m=20000)
-    store.save_events("renee", [event])
-    store.save_macro("renee", macro)
-    h["set_weekly_template"]({"template": {"tue": [{"kind": "bike", "role": "hard"}]}, "confirm": True})
-    ws = macro.blocks[0].start_date + timedelta(weeks=1)
-    y, w, _ = ws.isocalendar()
-
-    draft = h["replace_week_plan"]({"iso_week": f"{y}-W{w:02d}"})
-
-    assert any("held" in x.lower() for x in draft["planning_warnings"])

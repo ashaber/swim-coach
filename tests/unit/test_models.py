@@ -902,7 +902,7 @@ def test_feedback_workout_id_only_shape_still_validates_unchanged():
 def test_feedback_session_linkage_validates():
     # A question about a PLANNED session (not yet completed as a Workout)
     # links by (session_date, session_sport) instead -- stable across a
-    # `replace_week_plan` regenerate, unlike a raw session_id.
+    # week regeneration, unlike a raw session_id.
     feedback = make_feedback(
         workout_id=None,
         session_date=date(2026, 7, 6),
