@@ -101,33 +101,6 @@ caller working with a course whose real laps are known to run under ~2
 minutes should pass an explicit, smaller `min_lap_duration_s`, not rely on
 the default.
 
-## Heading-aware crossings
-
-**Coach judgment:** `GPS_LAP_HEADING_TOL_DEG = 110.0` -- a pass of the lap
-mark only counts when the direction of travel there is within this many
-degrees of the direction at the mark's reference pass. Position alone cannot
-tell a lap-mark pass from a course that runs back past the mark the other
-way: on the 2026-11-21 cyclocross race the return leg ran 8-20 m from the
-finish arch heading 160-195 degrees round from the arch's own heading,
-about 79 s before every real pass, inside `GPS_LAP_PROXIMITY_M`, so the
-detector cut a bogus lap there (and the watch's own position auto-lap fired
-a second split on it). 110 degrees sits well short of a U-turn (180) yet
-wide enough for a 90-degree corner right at the line, where the 6 s heading
-straddles the turn and reads 45 degrees off either way. Within a pass the
-crossing is the closest approach, not the first sample inside the radius.
-Where a heading cannot be computed (no GPS, stationary) the test is skipped
-and the old position-only behaviour applies. No published source; an
-engineering default sized to the one observed course.
-**Test:** `tests/unit/test_heading_aware_marks.py` (a synthetic loop with a
-wrong-way pass 80 s before each real pass: only the real passes cross, and
-the canonical laps equal the mark-to-mark laps); the existing
-`test_canonical_laps.py` pins the corner-at-the-line case.
-
-**Coach judgment:** `HEADING_SPAN_SAMPLES = 3` (heading from the fix 3 s before to the fix 3 s
-after, enough to smooth jitter without smearing a corner) and
-`HEADING_MIN_MOVE_M = 3.0` (under that much movement across the span the
-rider is stationary and has no heading). **Test:** same file.
-
 **Coach judgment:** `MIN_USABLE_GPS_SAMPLES = 2` -- fewer than two real
 (non-`None`) lat/lng samples can't establish "moved away from the start and
 came back," so detection isn't attempted at all (`[]`) rather than
@@ -174,3 +147,30 @@ feature that happens to sit within the proximity radius of the start).
 confidence as device telemetry -- the same "distinct from `WorkoutSet`"
 precedent `WorkoutLap`'s own docstring already sets for a different
 provenance boundary.
+
+## Heading-aware crossings
+
+**Coach judgment:** `GPS_LAP_HEADING_TOL_DEG = 110.0` -- a pass of the lap
+mark only counts when the direction of travel there is within this many
+degrees of the direction at the mark's reference pass. Position alone cannot
+tell a lap-mark pass from a course that runs back past the mark the other
+way: on the 2026-11-21 cyclocross race the return leg ran 8-20 m from the
+finish arch heading 160-195 degrees round from the arch's own heading,
+about 79 s before every real pass, inside `GPS_LAP_PROXIMITY_M`, so the
+detector cut a bogus lap there (and the watch's own position auto-lap fired
+a second split on it). 110 degrees sits well short of a U-turn (180) yet
+wide enough for a 90-degree corner right at the line, where the 6 s heading
+straddles the turn and reads 45 degrees off either way. Within a pass the
+crossing is the closest approach, not the first sample inside the radius.
+Where a heading cannot be computed (no GPS, stationary) the test is skipped
+and the old position-only behaviour applies. No published source; an
+engineering default sized to the one observed course.
+**Test:** `tests/unit/test_heading_aware_marks.py` (a synthetic loop with a
+wrong-way pass 80 s before each real pass: only the real passes cross, and
+the canonical laps equal the mark-to-mark laps); the existing
+`test_canonical_laps.py` pins the corner-at-the-line case.
+
+**Coach judgment:** `HEADING_SPAN_SAMPLES = 3` (heading from the fix 3 s before to the fix 3 s
+after, enough to smooth jitter without smearing a corner) and
+`HEADING_MIN_MOVE_M = 3.0` (under that much movement across the span the
+rider is stationary and has no heading). **Test:** same file.

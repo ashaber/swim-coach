@@ -39,3 +39,10 @@ cards:
   recommendation: When presenting per-lap data, label GPS-detected lap splits as lower-confidence than
     device-recorded laps — they can be wrong in ways native FIT lap frames aren't.
   content_hash: 8edad823e301ff27118caa0e2b56bdd90e011f5a6194954d74dc4a9fc3653497
+- section: heading-aware-crossings
+  heading: Heading-aware crossings
+  summary: A mark pass counts only when travelling within 110 degrees of the reference pass direction,
+    at closest approach, so a return leg passing the mark the other way no longer cuts a lap.
+  recommendation: Do not read a lap cut where the course passes the mark heading the other way as a real
+    lap; the laps are mark to mark in the mark's own direction.
+  content_hash: 5be8eaeba9b50ede891d977011daeb85320a416b789582fc85dce836f6d9155f
