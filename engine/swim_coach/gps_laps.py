@@ -155,13 +155,14 @@ GPS_LAP_MIN_DURATION_S = 120.0
 # chute or start corral) that a naive proximity-only check could otherwise
 # double-count as separate laps. library/32-gps-lap-detection.md.
 
-GPS_LAP_HEADING_TOL_DEG = 90.0
+GPS_LAP_HEADING_TOL_DEG = 110.0
 # Coach judgment: a pass of the lap mark only counts when the direction of
 # travel is within this many degrees of the direction at the mark's reference
-# pass. 90 deg separates "same way" from "back the other way" (the 2026-11-21
-# race: a return leg ran 8-20 m past the finish arch heading ~170 deg round
-# from the arch's own heading, ~79 s before each real pass) while leaving room
-# for a corner right at the line. library/32-gps-lap-detection.md.
+# pass. 110 deg separates "same way" from "back the other way" (the 2026-11-21
+# race: a return leg ran 8-20 m past the finish arch 160-195 deg round from
+# the arch's own heading, ~79 s before each real pass) while leaving room for
+# a 90 deg corner right at the line, where the 6 s heading straddles the turn
+# and reads 45 deg off either way. library/32-gps-lap-detection.md.
 
 HEADING_SPAN_SAMPLES = 3
 # Coach judgment: heading is the bearing from the fix this many samples before
@@ -231,6 +232,14 @@ def _fix(lat: list, lng: list, i: int) -> tuple[float, float] | None:
     return (lat[i], lng[i]) if 0 <= i < len(lat) and 0 <= i < len(lng) and lat[i] is not None and lng[i] is not None else None
 
 
+def _bearing(a: tuple[float, float], b: tuple[float, float]) -> float | None:
+    if haversine_distance_m(*a, *b) < HEADING_MIN_MOVE_M:
+        return None
+    dy = b[0] - a[0]
+    dx = (b[1] - a[1]) * math.cos(math.radians((a[0] + b[0]) / 2))
+    return math.degrees(math.atan2(dx, dy)) % 360.0
+
+
 def heading_at_index(series: dict | None, i: int) -> float | None:
     """Direction of travel (degrees clockwise from north, 0-360) at sample `i`: the bearing from the
     fix `HEADING_SPAN_SAMPLES` before to the fix that many after (clamped to the recording). None
@@ -239,12 +248,10 @@ def heading_at_index(series: dict | None, i: int) -> float | None:
         return None
     lat, lng = series.get("lat") or [], series.get("lng") or []
     n = min(len(lat), len(lng))
-    a, b = _fix(lat, lng, max(0, i - HEADING_SPAN_SAMPLES)), _fix(lat, lng, min(n - 1, i + HEADING_SPAN_SAMPLES))
-    if a is None or b is None or haversine_distance_m(*a, *b) < HEADING_MIN_MOVE_M:
+    if n == 0:
         return None
-    dy = b[0] - a[0]
-    dx = (b[1] - a[1]) * math.cos(math.radians((a[0] + b[0]) / 2))
-    return math.degrees(math.atan2(dx, dy)) % 360.0
+    a, b = _fix(lat, lng, max(0, i - HEADING_SPAN_SAMPLES)), _fix(lat, lng, min(n - 1, i + HEADING_SPAN_SAMPLES))
+    return _bearing(a, b) if a is not None and b is not None else None
 
 
 def heading_at_time(series: dict | None, at_s: float) -> float | None:

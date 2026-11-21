@@ -74,7 +74,7 @@ def _at_the_mark(laps: Sequence[WorkoutLap], i: int, series: dict | None) -> boo
     return metres_apart(mark, begin) <= FRAGMENT_START_RADIUS_M and metres_apart(mark, end) <= START_LINE_RADIUS_M
 
 
-def _combine(a: WorkoutLap, b: WorkoutLap) -> WorkoutLap:
+def combine_laps(a: WorkoutLap, b: WorkoutLap) -> WorkoutLap:
     """`b` folded into `a` (the preceding lap): summed time/distance, duration-weighted averages."""
     total = a.duration_s + b.duration_s
 
@@ -112,7 +112,7 @@ def merge_double_trigger_laps(laps: Sequence[WorkoutLap], series: dict | None = 
     out: list[WorkoutLap] = []
     for i, lap in enumerate(timed):
         if i in merge:
-            out[-1] = _combine(out[-1], lap)
+            out[-1] = combine_laps(out[-1], lap)
         else:
             out.append(lap)
     return out + untimed

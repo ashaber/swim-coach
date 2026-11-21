@@ -12,8 +12,12 @@ computed once per analysis and stored (`WorkoutAnalytics.laps`):
 3. Find the lap MARK: for a race the start of the first full device lap after the start (for a ride
    the anchor of the largest group of similar laps; with no device lap to read it from, the track
    position at the race start / the first fix).
-4. Fill missed laps: a lap well over one typical lap long that contains a GPS crossing of the mark
+4. Merge wrong-way splits: a device lap that starts near the mark but heading against the mark's
+   direction (the watch's auto-lap fired on a return leg passing the mark the other way) is folded
+   into the preceding lap (`merged`). Then fill missed laps: a lap well over one typical lap long that contains a GPS crossing of the mark
    (`gps_laps.mark_crossings`) is cut there. With no usable device laps, the crossings alone make the laps.
+   A crossing only counts in the mark's own direction of travel (`gps_laps.GPS_LAP_HEADING_TOL_DEG`):
+   a course that runs back past the mark the other way does not cut a lap there.
 5. Flag each lap: `start_lap` (begins at the race start away from the mark) and `comparable` (starts
    at the mark and covers a similar distance to the other such laps). Lap-to-lap comparisons (course
    sectors, race efficiency trends, lap consistency) use comparable laps only.
@@ -27,8 +31,8 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Sequence
 
-from swim_coach.gps_laps import GPS_LAP_MIN_DURATION_S, detect_gps_laps, mark_crossings
-from swim_coach.lap_normalise import START_LINE_RADIUS_M, merge_double_trigger_laps, metres_apart, start_point
+from swim_coach.gps_laps import GPS_LAP_MIN_DURATION_S, detect_gps_laps, mark_crossings, mark_heading, same_direction
+from swim_coach.lap_normalise import START_LINE_RADIUS_M, combine_laps, merge_double_trigger_laps, metres_apart, start_point
 from swim_coach.models import CanonicalLap, CanonicalLapSource, WorkoutLap
 from swim_coach.mtb_dynamics import mean_present, window_indices
 
@@ -36,6 +40,13 @@ LAP_DISTANCE_TOLERANCE = 0.10  # Coach judgment: laps within +-10% of each other
 MIN_LAP_S = 120  # Coach judgment: shorter than this is a split, not a lap worth comparing
 START_SNAP_S = 2.0  # Coach judgment: a device lap pressed within 2 s of the race start was pressed at the gun
 FILL_MIN_LONG_FACTOR = 1.5  # Coach judgment: only a lap this many times a typical lap is a missed press worth cutting at the mark
+
+
+@dataclass(frozen=True)
+class _Mark:
+    """The lap mark: its position and the direction of travel at its reference pass (None when unknown)."""
+    point: tuple[float, float]
+    heading: float | None = None
 
 
 @dataclass
@@ -105,13 +116,16 @@ def _lap(n: int, span: _Span, series: dict) -> CanonicalLap:
     )
 
 
-def _near(series: dict, ref: tuple[float, float] | None, at_s: float) -> bool:
-    """Within the start-line radius of `ref`; assumed when either position is unknown (no GPS)."""
+def _near(series: dict, ref: tuple[float, float] | None, at_s: float, heading: float | None = None) -> bool:
+    """Within the start-line radius of `ref` and, when `heading` is known, travelling the mark's way;
+    assumed when either position is unknown (no GPS)."""
     here = start_point(series, at_s)
-    return ref is None or here is None or metres_apart(ref, here) <= START_LINE_RADIUS_M
+    if ref is None or here is None:
+        return True
+    return metres_apart(ref, here) <= START_LINE_RADIUS_M and same_direction(series, at_s, heading)
 
 
-def _best_group(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, float] | None) -> list[CanonicalLap]:
+def _best_group(laps: Sequence[CanonicalLap], series: dict, mark: _Mark | None) -> list[CanonicalLap]:
     """The largest group of full laps (not the start lap) within the size tolerance of one anchor
     lap that start at the mark (with no mark: at the anchor's own start); the earliest anchor wins
     ties. Size is distance, or duration when the laps carry no distance (no distance channel)."""
@@ -119,31 +133,52 @@ def _best_group(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, f
     size = (lambda l: l.distance_m) if pool and all(l.distance_m for l in pool) else (lambda l: l.duration_s)
     best: list[CanonicalLap] = []
     for anchor in pool:
-        ref = mark if mark is not None else start_point(series, anchor.start_s)
+        ref = mark.point if mark is not None else start_point(series, anchor.start_s)
+        heading = mark.heading if mark is not None else None
         group = [
             l for l in pool
-            if abs(size(l) - size(anchor)) <= LAP_DISTANCE_TOLERANCE * size(anchor) and _near(series, ref, l.start_s)
+            if abs(size(l) - size(anchor)) <= LAP_DISTANCE_TOLERANCE * size(anchor) and _near(series, ref, l.start_s, heading)
         ]
         if len(group) > len(best):
             best = group
     return best
 
 
-def _find_mark(laps: Sequence[CanonicalLap], series: dict, race_start_s: float | None) -> tuple[float, float] | None:
+def _find_mark(laps: Sequence[CanonicalLap], series: dict, race_start_s: float | None) -> _Mark | None:
     """The lap mark's position. Race: where the first full device lap after the start begins; ride:
     where the largest group of similar laps begins. Without a device lap to read it from, the track
-    position at the race start (or the first fix)."""
+    position at the race start (or the first fix). Its heading is the direction of travel there."""
     if race_start_s is not None:
         full = next((l for l in laps if not l.start_lap and l.source in ("device", "merged") and l.duration_s >= MIN_LAP_S), None)
-        return start_point(series, full.start_s if full else race_start_s)
-    group = _best_group(laps, series, None)
-    anchor = group[0] if group else next((l for l in laps if l.duration_s >= MIN_LAP_S), None)
-    return start_point(series, anchor.start_s if anchor else series["t_s"][0])
+        at_s = full.start_s if full else race_start_s
+    else:
+        group = _best_group(laps, series, None)
+        anchor = group[0] if group else next((l for l in laps if l.duration_s >= MIN_LAP_S), None)
+        at_s = anchor.start_s if anchor else series["t_s"][0]
+    point = start_point(series, at_s)
+    return _Mark(point, mark_heading(series, point, at_s)) if point is not None else None
 
 
-def _fill_missed_laps(spans: list[_Span], series: dict, mark: tuple[float, float], typical_s: float | None) -> list[_Span]:
+def _merge_wrong_way_splits(spans: list[_Span], series: dict, mark: _Mark) -> list[_Span]:
+    """Fold each device lap that starts near the mark but heading against it into the preceding lap."""
+    out: list[_Span] = []
+    for span in spans:
+        wrong_way = (
+            out and span.source in ("device", "merged") and not span.trimmed
+            and _near_known(series, mark.point, span.start_s) and not same_direction(series, span.start_s, mark.heading)
+        )
+        if not wrong_way:
+            out.append(span)
+            continue
+        prev = out[-1]
+        device = combine_laps(prev.device, span.device) if prev.device is not None and span.device is not None else None
+        out[-1] = _Span(prev.start_s, span.end_s, "merged" if prev.source in ("device", "merged") else prev.source, device, prev.trimmed)
+    return out
+
+
+def _fill_missed_laps(spans: list[_Span], series: dict, mark: _Mark, typical_s: float | None) -> list[_Span]:
     """Cut each lap that is a missed press (or a GPS-only span) at the crossings of the mark inside it."""
-    crossings = mark_crossings(series, mark)
+    crossings = mark_crossings(series, mark.point, reference_heading=mark.heading)
     out: list[_Span] = []
     for span in spans:
         long_enough = span.source == "gps" or (typical_s is not None and span.end_s - span.start_s >= FILL_MIN_LONG_FACTOR * typical_s)
@@ -163,27 +198,28 @@ def _fill_missed_laps(spans: list[_Span], series: dict, mark: tuple[float, float
 def _gps_spans(series: dict, race_start_s: float | None) -> list[_Span]:
     """Laps from GPS crossings of the mark alone: the track position at the race start, else the first fix."""
     ref = start_point(series, race_start_s) if race_start_s is not None else None
-    found = detect_gps_laps(series, reference=ref, from_s=race_start_s)
+    heading = mark_heading(series, ref, race_start_s) if ref is not None else None
+    found = detect_gps_laps(series, reference=ref, from_s=race_start_s, reference_heading=heading)
     return [_Span(g.start_s, g.end_s, "gps", trimmed=race_start_s is not None and k == 0) for k, g in enumerate(found)]
 
 
-def _typical_s(laps: Sequence[CanonicalLap], series: dict, mark: tuple[float, float] | None) -> float | None:
+def _typical_s(laps: Sequence[CanonicalLap], series: dict, mark: _Mark | None) -> float | None:
     group = [l for l in _best_group(laps, series, mark) if l.source in ("device", "merged")]
     return median(l.duration_s for l in group) if group else None
 
 
-def _finish(spans: list[_Span], series: dict, mark: tuple[float, float] | None) -> list[CanonicalLap]:
+def _finish(spans: list[_Span], series: dict, mark: _Mark | None) -> list[CanonicalLap]:
     """Number the spans and set `start_lap` / `comparable`. The lap from the gun is a start lap unless
     it is a full lap from the mark like the others."""
     laps = [_lap(n, s, series) for n, s in enumerate(spans, 1)]
     from_gun = {l.n for l in laps if l.start_lap}
-    flagged = [l.model_copy(update={"start_lap": l.start_lap and not _near_known(series, mark, l.start_s)}) for l in laps]
+    flagged = [l.model_copy(update={"start_lap": l.start_lap and not _near_known(series, mark.point if mark else None, l.start_s)}) for l in laps]
     group = {l.n for l in _best_group(flagged, series, mark)}
     return [l.model_copy(update={"comparable": l.n in group, "start_lap": l.n in from_gun and l.n not in group}) for l in flagged]
 
 
 def _near_known(series: dict, mark: tuple[float, float] | None, at_s: float) -> bool:
-    """Positively at the mark (unlike `_near`, unknown is not at the mark)."""
+    """Positively at the mark's position (unlike `_near`, unknown is not at the mark)."""
     here = start_point(series, at_s)
     return mark is not None and here is not None and metres_apart(mark, here) <= START_LINE_RADIUS_M
 
@@ -213,10 +249,13 @@ def build_canonical_laps(
     laps = [_lap(n, s, series) for n, s in enumerate(spans, 1)]
     mark = _find_mark(laps, series, race_start_s)
     if mark is not None and spans:
+        spans = _merge_wrong_way_splits(spans, series, mark)
+        laps = [_lap(n, s, series) for n, s in enumerate(spans, 1)]
         spans = _fill_missed_laps(spans, series, mark, _typical_s(laps, series, mark))
     result = _finish(spans, series, mark)
     if not _comparable_pair(result):
-        alt_mark = start_point(series, race_start_s) if race_start_s is not None else None
+        alt_point = start_point(series, race_start_s) if race_start_s is not None else None
+        alt_mark = _Mark(alt_point, mark_heading(series, alt_point, race_start_s)) if alt_point is not None else None
         alt = _finish(_gps_spans(series, race_start_s), series, alt_mark)
         if _comparable_pair(alt):
             return alt
