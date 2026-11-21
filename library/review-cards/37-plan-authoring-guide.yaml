@@ -41,11 +41,11 @@ cards:
   content_hash: e8a9438002f5c891dc3eca9c07660bec02aeb944d9f2543144d7fdd8a12e1e34
 - section: weekly-review-order-non-race-weeks
   heading: Weekly review order (non-race weeks)
-  summary: Read compliance, then CTL vs. target, then TSB/wellness trend, then session texture, in that order;
-    adjust only the upcoming week unless goal or capacity truly changed.
-  recommendation: Follow the fixed read order every week, and say plainly when the plan needs no change rather
-    than tinkering for its own sake.
-  content_hash: 09822232ea56a572551ecb039100980a6e4f63f1dd88743bc827498caaeaa7bc
+  summary: Read compliance, CTL vs. target, TSB/wellness, then session texture; adjust only the upcoming week. For
+    tempo, threshold and VO2 sessions, call get_progression and author one candidate with rung.
+  recommendation: Follow the fixed read order, say plainly when no change is needed, and author quality sessions
+    from one get_progression candidate.
+  content_hash: 3b4739cf066e79d837723e82566c0d6ae4a819d9e5bb0df270147e252c7ef0e6
 - section: warm-up-and-primers-intense-sessions
   heading: Warm-up and primers (intense sessions)
   summary: Coach judgment, unsourced. A Z5+ or threshold bike session warms up from Z1 (about 130 W or less),

@@ -53,7 +53,7 @@ from app.session_thread import append_message as append_session_message
 from app.session_thread import thread_messages as session_thread_messages
 from app.router_shadow import ShadowInputs, begin_shadow
 from app.store_factory import make_store
-from app.tools import TOOLS_SCHEMA, build_tool_handlers
+from app.tools import build_tool_handlers, tools_schema
 
 router = APIRouter()
 log = get_logger("app.routes.chat")
@@ -567,8 +567,9 @@ async def stream_chat_response(
             confirmer_role=confirmer_role,
             confirmer_id=confirmer_id,
             plan_change_notifier=bound_plan_change_notifier,
+            progression_tools=settings.progression_tools_enabled,
         )
-        return system, messages, TOOLS_SCHEMA, tool_handlers
+        return system, messages, tools_schema(settings.progression_tools_enabled), tool_handlers
 
     if light:
         light_request = (

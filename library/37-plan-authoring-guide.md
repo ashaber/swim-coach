@@ -167,6 +167,12 @@ shortened). Adjust the **upcoming week**, not the whole macro, unless the
 goal or capacity has genuinely changed. "The plan is working, keep going"
 is a legitimate output — constant tinkering is its own failure mode.
 
+**Quality sessions (tempo, threshold, VO2).** Call `get_progression` first, pick one of its candidates (one
+lever, one step) and author it with `rung`, e.g. `"3x12 min/5 min Z4"`; the engine builds the steps,
+duration and targets, so the session is watch-pushable. After a threshold rise expect a restart lower (the
+rebase note); start from that. Report any `adjustments` the tool returns, and treat `progression-*`
+findings like any other: fix, or keep with a reason.
+
 ## Warm-up and primers (intense sessions)
 
 **Coach judgment** (Andrew's coaching feedback on the 2026-09-29 40/20 VO2
