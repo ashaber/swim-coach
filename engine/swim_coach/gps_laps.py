@@ -155,6 +155,25 @@ GPS_LAP_MIN_DURATION_S = 120.0
 # chute or start corral) that a naive proximity-only check could otherwise
 # double-count as separate laps. library/32-gps-lap-detection.md.
 
+GPS_LAP_HEADING_TOL_DEG = 110.0
+# Coach judgment: a pass of the lap mark only counts when the direction of
+# travel is within this many degrees of the direction at the mark's reference
+# pass. 110 deg separates "same way" from "back the other way" (the 2026-11-21
+# race: a return leg ran 8-20 m past the finish arch 160-195 deg round from
+# the arch's own heading, ~79 s before each real pass) while leaving room for
+# a 90 deg corner right at the line, where the 6 s heading straddles the turn
+# and reads 45 deg off either way. library/32-gps-lap-detection.md.
+
+HEADING_SPAN_SAMPLES = 3
+# Coach judgment: heading is the bearing from the fix this many samples before
+# to the fix this many after (1 Hz: +-3 s), enough to smooth GPS jitter without
+# smearing a corner. library/32-gps-lap-detection.md.
+
+HEADING_MIN_MOVE_M = 3.0
+# Coach judgment: under this much movement across that span the rider is
+# stationary and there is no direction; the heading test is then skipped.
+# library/32-gps-lap-detection.md.
+
 MIN_USABLE_GPS_SAMPLES = 2
 # Coach judgment: fewer than 2 real lat/lng samples can't establish
 # "moved away and came back" at all -- returned as [] rather than attempted.
@@ -209,16 +228,82 @@ class GpsLap:
         return self.end_s - self.start_s
 
 
-def _approach_minimum(t_s: list, lat: list, lng: list, ref: tuple[float, float], i: int, n: int) -> int:
-    """The index of the closest approach to `ref` in the run of samples from `i` onward that keeps
-    getting closer, so a crossing lands on the mark itself, not on the first sample inside the radius."""
-    best = haversine_distance_m(*ref, lat[i], lng[i])
-    while i + 1 < n and lat[i + 1] is not None and lng[i + 1] is not None:
-        nxt = haversine_distance_m(*ref, lat[i + 1], lng[i + 1])
-        if nxt >= best:
+def _fix(lat: list, lng: list, i: int) -> tuple[float, float] | None:
+    return (lat[i], lng[i]) if 0 <= i < len(lat) and 0 <= i < len(lng) and lat[i] is not None and lng[i] is not None else None
+
+
+def _bearing(a: tuple[float, float], b: tuple[float, float]) -> float | None:
+    if haversine_distance_m(*a, *b) < HEADING_MIN_MOVE_M:
+        return None
+    dy = b[0] - a[0]
+    dx = (b[1] - a[1]) * math.cos(math.radians((a[0] + b[0]) / 2))
+    return math.degrees(math.atan2(dx, dy)) % 360.0
+
+
+def heading_at_index(series: dict | None, i: int) -> float | None:
+    """Direction of travel (degrees clockwise from north, 0-360) at sample `i`: the bearing from the
+    fix `HEADING_SPAN_SAMPLES` before to the fix that many after (clamped to the recording). None
+    without GPS there or when the rider moved under `HEADING_MIN_MOVE_M` (stationary)."""
+    if not series:
+        return None
+    lat, lng = series.get("lat") or [], series.get("lng") or []
+    n = min(len(lat), len(lng))
+    if n == 0:
+        return None
+    a, b = _fix(lat, lng, max(0, i - HEADING_SPAN_SAMPLES)), _fix(lat, lng, min(n - 1, i + HEADING_SPAN_SAMPLES))
+    return _bearing(a, b) if a is not None and b is not None else None
+
+
+def heading_at_time(series: dict | None, at_s: float) -> float | None:
+    """`heading_at_index` at the first sample at/after `at_s` (None past the end)."""
+    if not series or not series.get("t_s"):
+        return None
+    i = bisect_left(series["t_s"], at_s)
+    return heading_at_index(series, i) if i < len(series["t_s"]) else None
+
+
+def heading_difference(a: float, b: float) -> float:
+    """Smallest angle between two bearings, 0-180 degrees."""
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def same_direction(series: dict | None, at_s: float, reference_heading: float | None, tolerance_deg: float = GPS_LAP_HEADING_TOL_DEG) -> bool:
+    """Is the travel direction at `at_s` within `tolerance_deg` of `reference_heading`? True (the
+    test is skipped) when either heading is unknown."""
+    if reference_heading is None:
+        return True
+    here = heading_at_time(series, at_s)
+    return here is None or heading_difference(here, reference_heading) <= tolerance_deg
+
+
+def mark_heading(series: dict | None, mark: tuple[float, float], at_s: float, window_s: float = 15.0) -> float | None:
+    """Direction of travel at the mark's reference pass: the heading at the closest approach to
+    `mark` within `window_s` of `at_s`. None when it cannot be computed."""
+    if not series or not series.get("t_s"):
+        return None
+    t_s, lat, lng = series["t_s"], series.get("lat") or [], series.get("lng") or []
+    near = [i for i in range(bisect_left(t_s, at_s - window_s), min(len(t_s), bisect_left(t_s, at_s + window_s + 1e-9))) if _fix(lat, lng, i)]
+    if not near:
+        return None
+    return heading_at_index(series, min(near, key=lambda i: haversine_distance_m(*mark, *_fix(lat, lng, i))))
+
+
+def _closest_in_run(lat: list, lng: list, ref: tuple[float, float], i: int, n: int, proximity_m: float) -> tuple[int, int]:
+    """For the run of samples within `proximity_m` of `ref` starting at `i`: (the index of the closest
+    approach, the last index of the run). A dropped fix does not end the run."""
+    best_i, best, j = i, haversine_distance_m(*ref, lat[i], lng[i]), i
+    while j + 1 < n:
+        if lat[j + 1] is None or lng[j + 1] is None:
+            j += 1
+            continue
+        d = haversine_distance_m(*ref, lat[j + 1], lng[j + 1])
+        if d > proximity_m:
             break
-        best, i = nxt, i + 1
-    return i
+        j += 1
+        if d < best:
+            best_i, best = j, d
+    return best_i, j
 
 
 def _crossing_indices(
@@ -230,11 +315,15 @@ def _crossing_indices(
     min_lap_duration_s: float,
     *,
     include_start: bool,
+    reference_heading: float | None = None,
+    heading_tolerance_deg: float = GPS_LAP_HEADING_TOL_DEG,
 ) -> list[int]:
     """Indices of the samples where the track returns to `reference` (default: the first GPS sample)
     after leaving it, scanning from `from_s` (default: the start). `include_start` puts the first
     scanned sample in as the opening boundary (laps are measured from it); without it only real
-    crossings come back. `[]` for every "nothing usable" case."""
+    crossings come back. A pass counts at its closest approach to `reference`, and only when the
+    direction of travel there is within `heading_tolerance_deg` of `reference_heading` (a pass back
+    the other way is skipped; no heading, no test). `[]` for every "nothing usable" case."""
     if not series:
         return []
     t_s, lat, lng = series.get("t_s"), series.get("lat"), series.get("lng")
@@ -263,11 +352,14 @@ def _crossing_indices(
             if dist >= min_away_m:
                 armed = True
         elif dist <= proximity_m and t_s[i] - last_boundary_t >= min_lap_duration_s:
-            at = _approach_minimum(t_s, lat, lng, ref, i, n)
-            boundaries.append(at)
-            last_boundary_t = t_s[at]
-            armed = False
-            i = at
+            at, run_end = _closest_in_run(lat, lng, ref, i, n, proximity_m)
+            if same_direction(series, t_s[at], reference_heading, heading_tolerance_deg):
+                boundaries.append(at)
+                last_boundary_t = t_s[at]
+                armed = False
+                i = at
+            else:
+                i = run_end
         i += 1
     return boundaries
 
@@ -280,10 +372,15 @@ def mark_crossings(
     proximity_m: float = GPS_LAP_PROXIMITY_M,
     min_away_m: float = GPS_LAP_MIN_AWAY_M,
     min_lap_duration_s: float = GPS_LAP_MIN_DURATION_S,
+    reference_heading: float | None = None,
 ) -> list[float]:
     """Times (activity clock) at which the track crosses `reference` (a lap mark), at least
-    `min_lap_duration_s` apart; the start of the scan is not a crossing. `[]` without usable GPS."""
-    found = _crossing_indices(series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s, include_start=False)
+    `min_lap_duration_s` apart; the start of the scan is not a crossing. With `reference_heading`
+    only passes in that direction (within `GPS_LAP_HEADING_TOL_DEG`) count. `[]` without usable GPS."""
+    found = _crossing_indices(
+        series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s,
+        include_start=False, reference_heading=reference_heading,
+    )
     return [series["t_s"][i] for i in found]
 
 
@@ -295,6 +392,7 @@ def detect_gps_laps(
     proximity_m: float = GPS_LAP_PROXIMITY_M,
     min_away_m: float = GPS_LAP_MIN_AWAY_M,
     min_lap_duration_s: float = GPS_LAP_MIN_DURATION_S,
+    reference_heading: float | None = None,
 ) -> list[GpsLap]:
     """Detect real per-course-lap boundaries from GPS position on a looped
     course. See the module docstring for the full algorithm and edge-case
@@ -302,9 +400,13 @@ def detect_gps_laps(
 
     `reference` is the lap mark (default: the first GPS sample at/after `from_s`, which is the
     warm-up start on a one-file warm-up + race and finds nothing -- pass the mark instead);
-    laps are measured from the first sample at/after `from_s`.
+    laps are measured from the first sample at/after `from_s`. `reference_heading`: only
+    crossings in that direction count (see `mark_crossings`).
     """
-    boundaries = _crossing_indices(series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s, include_start=True)
+    boundaries = _crossing_indices(
+        series, reference, from_s, proximity_m, min_away_m, min_lap_duration_s,
+        include_start=True, reference_heading=reference_heading,
+    )
     if not boundaries:
         return []
     t_s = series["t_s"]
